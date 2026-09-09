@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import urllib.request
 import urllib.error
 from typing import Dict, Any, Optional, List
@@ -18,7 +19,7 @@ class LLMClient:
         elif provider == "deepseek":
             return "deepseek-reasoner"
         elif provider == "openai":
-            return "gpt-4o"
+            return "gpt-5"
         return "gemini-3.8-flash"
 
     def is_configured(self) -> bool:
@@ -49,7 +50,7 @@ class LLMClient:
             f"PR Author: @{pr_meta.get('author', {}).get('login', 'unknown')}\n"
             f"PR Number: #{pr_meta.get('number', '')}\n"
             f"Base Branch: {pr_meta.get('baseRefName', '')} <- Head: {pr_meta.get('headRefName', '')}\n\n"
-            f"DIFF:\n```diff\n{diff[:50000]}\n```"  # Send up to 50k chars
+            f"DIFF:\n```diff\n{diff[:50000]}\n```"
         )
 
         try:
@@ -61,37 +62,76 @@ class LLMClient:
             print(f"⚠️  LLM API error ({self.provider}): {e}")
             return None
 
-    def _call_gemini(self, system_prompt: str, user_prompt: str) -> str:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
-        payload = {
-            "systemInstruction": {
-                "parts": [{"text": system_prompt}]
-            },
-            "contents": [
-                {
-                    "parts": [{"text": user_prompt}]
-                }
-            ],
-            "generationConfig": {
-                "temperature": 0.2,
-                "maxOutputTokens": 8192
-            }
-        }
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"}
-        )
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            candidates = data.get("candidates", [])
-            if candidates:
-                parts = candidates[0].get("content", {}).get("parts", [])
-                if parts:
-                    return parts[0].get("text", "")
-        raise RuntimeError("No text returned by Gemini API")
+    def _call_gemini(self, system_prompt: str, user_prompt: str, max_retries: int = 2) -> str:
+        # If model is 3.8 or 3.7 (which experience high-demand spikes), prepare auto-fallback to 3.6
+        models_to_try = [self.model]
+        if self.model in ["gemini-3.8-flash", "gemini-3.7-flash"] and "gemini-3.6-flash" not in models_to_try:
+            models_to_try.append("gemini-3.6-flash")
 
-    def _call_openai_compatible(self, system_prompt: str, user_prompt: str) -> str:
+        last_error = None
+        for current_model in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{current_model}:generateContent?key={self.api_key}"
+            payload = {
+                "systemInstruction": {
+                    "parts": [{"text": system_prompt}]
+                },
+                "contents": [
+                    {
+                        "parts": [{"text": user_prompt}]
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": 0.2,
+                    "maxOutputTokens": 8192
+                }
+            }
+            data_bytes = json.dumps(payload).encode("utf-8")
+
+            for attempt in range(1, max_retries + 1):
+                try:
+                    req = urllib.request.Request(
+                        url,
+                        data=data_bytes,
+                        headers={"Content-Type": "application/json"}
+                    )
+                    with urllib.request.urlopen(req, timeout=90) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        candidates = data.get("candidates", [])
+                        if candidates:
+                            parts = candidates[0].get("content", {}).get("parts", [])
+                            if parts:
+                                if current_model != self.model:
+                                    print(f"  💡 [Gemini Auto-Fallback] Phản hồi thành công từ model ổn định: {current_model}")
+                                return parts[0].get("text", "")
+                    raise RuntimeError(f"No text returned by Gemini API ({current_model})")
+                except urllib.error.HTTPError as err:
+                    if err.code in [503, 429]:
+                        if attempt < max_retries:
+                            wait_sec = attempt * 2
+                            print(f"  ⏳ [Gemini {err.code}] {current_model} tạm thời bận, thử lại sau {wait_sec}s (Lần {attempt}/{max_retries})...")
+                            time.sleep(wait_sec)
+                            continue
+                        elif len(models_to_try) > 1 and current_model != models_to_try[-1]:
+                            print(f"  ⚠️ [{current_model}] Đạt giới hạn tải hoặc quota ({err.code}). Đang tự động chuyển tiếp sang {models_to_try[-1]}...")
+                            break
+                    err_body = ""
+                    try:
+                        err_body = err.read().decode("utf-8")
+                    except Exception:
+                        pass
+                    last_error = RuntimeError(f"HTTP {err.code}: {err.reason} - {err_body[:200]}")
+                except Exception as e:
+                    last_error = e
+                    if attempt < max_retries:
+                        time.sleep(2)
+                        continue
+                    break
+
+        if last_error:
+            raise last_error
+        raise RuntimeError("No response from Gemini API after fallback.")
+
+    def _call_openai_compatible(self, system_prompt: str, user_prompt: str, max_retries: int = 3) -> str:
         if self.provider == "deepseek":
             endpoint = "https://api.deepseek.com/v1/chat/completions"
         else:
@@ -105,17 +145,38 @@ class LLMClient:
             ],
             "temperature": 0.2
         }
-        req = urllib.request.Request(
-            endpoint,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}"
-            }
-        )
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            choices = data.get("choices", [])
-            if choices:
-                return choices[0].get("message", {}).get("content", "")
-        raise RuntimeError(f"No response returned from {self.provider} API")
+        data_bytes = json.dumps(payload).encode("utf-8")
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                req = urllib.request.Request(
+                    endpoint,
+                    data=data_bytes,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.api_key}"
+                    }
+                )
+                with urllib.request.urlopen(req, timeout=90) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    choices = data.get("choices", [])
+                    if choices:
+                        return choices[0].get("message", {}).get("content", "")
+                raise RuntimeError(f"No response returned from {self.provider} API")
+            except urllib.error.HTTPError as err:
+                if err.code in [503, 429, 500] and attempt < max_retries:
+                    wait_sec = attempt * 2
+                    print(f"  ⏳ [{self.provider.upper()} {err.code}] Server busy, retrying in {wait_sec}s (Attempt {attempt}/{max_retries})...")
+                    time.sleep(wait_sec)
+                    continue
+                err_body = ""
+                try:
+                    err_body = err.read().decode("utf-8")
+                except Exception:
+                    pass
+                raise RuntimeError(f"HTTP {err.code}: {err.reason} - {err_body[:200]}")
+            except Exception as e:
+                if attempt < max_retries:
+                    time.sleep(2)
+                    continue
+                raise

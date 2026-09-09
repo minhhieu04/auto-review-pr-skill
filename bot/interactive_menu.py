@@ -279,7 +279,7 @@ def _manage_ai_settings(config: Dict[str, Any], engine):
             print("\n  Chọn Provider:")
             print("    [1] Google Gemini (Mặc định: gemini-3.8-flash)")
             print("    [2] DeepSeek (Mặc định: deepseek-reasoner / deepseek-chat)")
-            print("    [3] OpenAI / ChatGPT (Mặc định: gpt-4o / o3-mini)")
+            print("    [3] OpenAI / ChatGPT (Mặc định: gpt-5 / gpt-4o)")
             p_choice = input("  Chọn [1-3]: ").strip()
             if p_choice == "1":
                 ai_conf["provider"] = "gemini"
@@ -289,7 +289,7 @@ def _manage_ai_settings(config: Dict[str, Any], engine):
                 ai_conf["model"] = "deepseek-reasoner"
             elif p_choice == "3":
                 ai_conf["provider"] = "openai"
-                ai_conf["model"] = "gpt-4o"
+                ai_conf["model"] = "gpt-5"
 
         elif sub == "2":
             key_input = input(f"\n  Dán {provider.upper()} API Key của bạn: ").strip()
