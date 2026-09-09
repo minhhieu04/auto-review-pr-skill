@@ -536,8 +536,44 @@ class ReviewEngine:
         md.append("### 📊 Decision: **" + verdict + "**")
         return "\n".join(md)
 
+    def align_findings_with_diff(self, findings: List[Dict[str, Any]], diff_chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Validate and align finding file/line to valid additions in the diff chunks so GitHub Review API succeeds."""
+        aligned = []
+        for f in findings:
+            target_file = f.get("file", "")
+            target_line = f.get("line", 0)
+
+            # Match chunk by exact file or path suffix
+            matched_chunk = None
+            for chunk in diff_chunks:
+                cf = chunk["file"]
+                if cf == target_file or cf.endswith(target_file) or target_file.endswith(cf):
+                    matched_chunk = chunk
+                    break
+
+            if not matched_chunk or not matched_chunk.get("additions"):
+                continue
+
+            valid_lines = [item["line"] for item in matched_chunk["additions"]]
+            if not valid_lines:
+                continue
+
+            f_copy = dict(f)
+            f_copy["file"] = matched_chunk["file"]
+
+            if target_line in valid_lines:
+                f_copy["line"] = target_line
+                aligned.append(f_copy)
+            else:
+                # Snap to closest line within 10 lines
+                closest = min(valid_lines, key=lambda l: abs(l - target_line))
+                if abs(closest - target_line) <= 10:
+                    f_copy["line"] = closest
+                    aligned.append(f_copy)
+        return aligned
+
     def post_review(self, repo: str, pr_number: int, commit_sha: str, review_body: str, findings: List[Dict[str, Any]]) -> None:
-        # 1. Post general comment
+        # 1. Post general comment (Dashboard, Checklist, Verdict)
         subprocess.run([
             "gh", "pr", "review", str(pr_number),
             "--repo", repo,
@@ -545,29 +581,54 @@ class ReviewEngine:
             "-b", review_body
         ], check=True)
 
-        # 2. Post inline comments if any critical/major
+        # 2. Post inline comments with code suggestions directly onto PR lines
         inline_comments = []
         for f in findings[:10]:
-            if f.get("level") in ["critical", "major", "minor"]:
+            if f.get("level") in ["critical", "major", "minor", "nit"]:
+                fix = f.get("fix") or f.get("suggestion", "")
+                agent_name = f.get("agent", "AI Reviewer")
+                body_text = f"{f.get('severity', '🟡 Major')} **{f.get('title', 'Review Finding')}** `[{agent_name}]`\n\n**Why:** {f.get('why', '')}"
+                if fix:
+                    body_text += f"\n\n```suggestion\n{fix}\n```"
                 inline_comments.append({
                     "path": f["file"],
-                    "line": f["line"],
-                    "body": f"{f['severity']} **{f['title']}** `[{f.get('agent', 'Reviewer')}]`\n\n**Why:** {f['why']}\n\n```suggestion\n{f['fix']}\n```"
+                    "line": int(f["line"]),
+                    "body": body_text
                 })
 
         if inline_comments:
+            print(f"  💬 Posting {len(inline_comments)} inline code suggestions directly to diff lines...")
             payload = {
                 "commit_id": commit_sha,
                 "event": "COMMENT",
-                "body": "🤖 Auto-Review: In-line suggestions from Multi-Agent Reviewers",
+                "body": "🤖 Auto-Review: In-line suggestions & code fixes",
                 "comments": inline_comments
             }
             res = subprocess.run([
                 "gh", "api", f"repos/{repo}/pulls/{pr_number}/reviews",
                 "--input", "-"
             ], input=json.dumps(payload), text=True, capture_output=True)
-            if res.returncode != 0:
-                print(f"Notice: In-line comment post fallback: {res.stderr}")
+            if res.returncode == 0:
+                print(f"  {GREEN}✅ Successfully posted {len(inline_comments)} inline code suggestions to GitHub!{RESET}")
+            else:
+                # Batch failed (possibly one line was slightly out of range), try individual comments
+                posted_count = 0
+                for c in inline_comments:
+                    single_payload = {
+                        "commit_id": commit_sha,
+                        "event": "COMMENT",
+                        "comments": [c]
+                    }
+                    single_res = subprocess.run([
+                        "gh", "api", f"repos/{repo}/pulls/{pr_number}/reviews",
+                        "--input", "-"
+                    ], input=json.dumps(single_payload), text=True, capture_output=True)
+                    if single_res.returncode == 0:
+                        posted_count += 1
+                if posted_count > 0:
+                    print(f"  {GREEN}✅ Successfully posted {posted_count}/{len(inline_comments)} inline suggestions.{RESET}")
+                else:
+                    print(f"  {YELLOW}ℹ️  Suggestions preserved in main review summary.{RESET}")
 
     def execute_review(self, repo: str, pr_number: int) -> Dict[str, Any]:
         print(f"🔍 Starting review on {repo} PR #{pr_number}...")
@@ -584,13 +645,22 @@ class ReviewEngine:
 
         # 1. Try AI-powered Review (Gemini / DeepSeek / OpenAI) if configured
         ai_body = None
+        findings = []
         if self.llm_client and self.llm_client.is_configured():
             print(f"\n  {BOLD}🧠 Dispatching AI Reviewer ({self.llm_client.provider.upper()} - {self.llm_client.model})...{RESET}")
             try:
                 rules_summary = self.load_bundled_rules()
-                ai_body = self.llm_client.generate_review(pr, diff, rules_summary)
-                if ai_body:
+                review_result = self.llm_client.generate_review(pr, diff, rules_summary)
+                if review_result:
+                    if isinstance(review_result, dict):
+                        ai_body = review_result.get("body", "")
+                        findings = review_result.get("findings", [])
+                    else:
+                        ai_body = str(review_result)
+                        findings = []
                     print(f"  {GREEN}✨ AI Review generated successfully by {self.llm_client.provider.upper()}!{RESET}")
+                    if findings:
+                        print(f"  {GREEN}🎯 Found {len(findings)} actionable code suggestions directly from AI!{RESET}")
             except Exception as e:
                 err_msg = str(e)
                 if "QUOTA_EXHAUSTED" in err_msg:
@@ -602,12 +672,12 @@ class ReviewEngine:
                     print(f"  {YELLOW}⚠️  AI generation failed: {err_msg[:120]}. "
                           f"Falling back to local subagents.{RESET}")
 
+        diff_chunks = self.parse_diff_chunks(diff)
         if ai_body:
             body = ai_body
-            findings = []
+            findings = self.align_findings_with_diff(findings, diff_chunks)
         else:
             # 2. Fallback to Local 4 Subagent Pipeline
-            diff_chunks = self.parse_diff_chunks(diff)
             files = [c["file"] for c in diff_chunks]
             findings = self.dispatch_subagents(diff_chunks)
             body = self.generate_review_markdown(pr, files, findings, is_rereview=is_rereview, prev_sha=last_sha)

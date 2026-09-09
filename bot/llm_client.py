@@ -51,8 +51,8 @@ class LLMClient:
     def is_configured(self) -> bool:
         return bool(self.api_key and self.provider in ["gemini", "deepseek", "openai"])
 
-    def generate_review(self, pr_meta: Dict[str, Any], diff: str, rules_summary: str) -> Optional[str]:
-        """Generate full code review markdown from LLM."""
+    def generate_review(self, pr_meta: Dict[str, Any], diff: str, rules_summary: str) -> Optional[Dict[str, Any]]:
+        """Generate full code review markdown from LLM and extract structured inline code suggestions."""
         if not self.is_configured():
             return None
 
@@ -67,8 +67,23 @@ class LLMClient:
             "1. Header with Reviewed Commit, Type, Effort Score (⭐ 1-5).\n"
             "2. '### 📊 Overview Dashboard' table with exact counts of 🔴 Critical, 🟡 Major, 🟢 Minor, 💡 Suggestions, and Nit: Style, plus a Verdict (🟢 APPROVE, 🟡 COMMENT, or 🔴 REQUEST_CHANGES).\n"
             "3. Detailed sections for findings with file:line, Why explanation, and GitHub Suggestion code blocks (```suggestion ... ```).\n"
-            "4. '### 📋 Google Review Checklist' table covering Design, Functionality, Complexity, Security, Tests, Style.\n"
-            "Do NOT wrap your entire response in triple backticks. Provide clean Markdown directly."
+            "4. '### 📋 Google Review Checklist' table covering Design, Functionality, Complexity, Security, Tests, Style.\n\n"
+            "### CRITICAL: INLINE CODE SUGGESTIONS BLOCK:\n"
+            "At the very end of your review, you MUST append a structured JSON block labeled ```json:inline_suggestions with up to 8 actionable code findings targeting specific modified lines in the diff:\n"
+            "```json:inline_suggestions\n"
+            "[\n"
+            "  {\n"
+            "    \"file\": \"path/to/modified_file.ext\",\n"
+            "    \"line\": 42,\n"
+            "    \"severity\": \"🔴 Critical\",\n"
+            "    \"level\": \"critical\",\n"
+            "    \"title\": \"Short descriptive title\",\n"
+            "    \"why\": \"Clear rationale explaining the bug or rule violation\",\n"
+            "    \"fix\": \"exact replacement code snippet to fix this line\"\n"
+            "  }\n"
+            "]\n"
+            "```\n"
+            "Note: 'file' MUST match the file path in the diff. 'line' MUST be a positive integer of an added/modified line (starts with '+'). 'level' must be 'critical', 'major', 'minor', or 'nit'."
         )
 
         user_content = (
@@ -79,14 +94,77 @@ class LLMClient:
             f"DIFF:\n```diff\n{diff[:50000]}\n```"
         )
 
+        raw_text = None
         try:
             if self.provider == "gemini":
-                return self._call_gemini(system_instruction, user_content)
+                raw_text = self._call_gemini(system_instruction, user_content)
             elif self.provider in ["deepseek", "openai"]:
-                return self._call_openai_compatible(system_instruction, user_content)
+                raw_text = self._call_openai_compatible(system_instruction, user_content)
         except Exception as e:
             print(f"⚠️  LLM API error ({self.provider}): {e}")
+            raise
+
+        if not raw_text:
             return None
+
+        # Extract structured inline findings and clean the markdown body
+        clean_body, findings = self._extract_findings(raw_text)
+        return {
+            "body": clean_body,
+            "findings": findings
+        }
+
+    def _extract_findings(self, text: str) -> tuple:
+        """Extract inline suggestions from JSON block or markdown regex fallback."""
+        import re
+        findings = []
+        clean_text = text
+
+        # 1. Primary: Parse ```json:inline_suggestions ... ```
+        pattern = r"```(?:json:inline_suggestions|json)\s*(\[\s*\{[\s\S]*?\}\s*\])\s*```"
+        match = re.search(pattern, text)
+        if match:
+            json_str = match.group(1)
+            try:
+                parsed = json.loads(json_str)
+                if isinstance(parsed, list):
+                    for item in parsed:
+                        if isinstance(item, dict) and item.get("file") and item.get("line"):
+                            findings.append({
+                                "agent": f"AI Reviewer ({self.provider.upper()})",
+                                "file": str(item.get("file", "")).strip(),
+                                "line": int(item.get("line", 0)),
+                                "severity": str(item.get("severity", "🟡 Major")),
+                                "level": str(item.get("level", "major")).lower(),
+                                "title": str(item.get("title", "Review Finding")),
+                                "why": str(item.get("why", "")),
+                                "fix": str(item.get("fix") or item.get("suggestion", "")).strip()
+                            })
+                    # Strip the raw JSON block from the user-facing markdown
+                    clean_text = text[:match.start()].rstrip() + "\n\n" + text[match.end():].lstrip()
+            except Exception:
+                pass
+
+        # 2. Fallback: Parse markdown sections with ```suggestion ... ```
+        if not findings:
+            finding_blocks = re.findall(
+                r"(?:###|####)\s*(🔴|🟡|🟢|💡|Nit:?)\s*([^\n]+)[\s\S]*?`?([a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+):(\d+)`?[\s\S]*?(?:\*\*Why:\*\*|Why:)\s*([^\n]+)[\s\S]*?```suggestion\s*\n([\s\S]*?)\n```",
+                text
+            )
+            for icon, title, file_path, line_str, why_text, fix_code in finding_blocks:
+                level_map = {"🔴": "critical", "🟡": "major", "🟢": "minor", "💡": "minor", "Nit:": "nit"}
+                findings.append({
+                    "agent": f"AI Reviewer ({self.provider.upper()})",
+                    "file": file_path.strip(),
+                    "line": int(line_str),
+                    "severity": f"{icon} {title.strip()}",
+                    "level": level_map.get(icon, "major"),
+                    "title": title.strip(),
+                    "why": why_text.strip(),
+                    "fix": fix_code.strip()
+                })
+
+        return clean_text.strip(), findings
 
     def _call_gemini(self, system_prompt: str, user_prompt: str, max_retries: int = 2) -> str:
         """Call Gemini API with smart fallback chain.
