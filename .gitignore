@@ -6,3 +6,5 @@ __pycache__/
 bot/state.json
 *.diff
 *.log
+.env
+.env.*

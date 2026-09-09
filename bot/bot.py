@@ -77,8 +77,16 @@ def main():
     args = parser.parse_args()
     config = load_config()
 
+    from llm_client import LLMClient
+    ai_conf = config.get("ai", {})
+    llm = LLMClient(
+        provider=ai_conf.get("provider", "gemini"),
+        api_key=ai_conf.get("api_key", ""),
+        model=ai_conf.get("model", "")
+    )
+
     state = StateManager()
-    engine = ReviewEngine(state_manager=state)
+    engine = ReviewEngine(state_manager=state, llm_client=llm)
 
     # Manual one-off run
     if args.pr:

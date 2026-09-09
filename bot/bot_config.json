@@ -14,6 +14,11 @@
     "port": 8765,
     "secret": ""
   },
+  "ai": {
+    "provider": "gemini",
+    "api_key": "",
+    "model": "gemini-2.5-flash"
+  },
   "features": {
     "auto_review_on_pr_opened": true,
     "auto_review_on_commit_push": true,

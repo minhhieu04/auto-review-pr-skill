@@ -160,8 +160,14 @@ def run_interactive_menu(engine, state_manager, config: Dict[str, Any]):
                 })
                 option_index += 1
 
+        ai_conf = config.get("ai", {})
+        prov_name = ai_conf.get("provider", "gemini").upper()
+        has_api_key = bool(ai_conf.get("api_key") or os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("DEEPSEEK_API_KEY"))
+        ai_badge = f"{GREEN}AI ON ({prov_name}){RESET}" if has_api_key else f"{DIM}Local Subagents (No API Key){RESET}"
+
         print(f"\n{BLUE}  {'─' * 66}{RESET}")
         print(f"{BOLD}  OTHER OPTIONS:{RESET}")
+        print(f"  {YELLOW}[k]{RESET}  Cài đặt AI Engine & API Key {DIM}(Gemini / DeepSeek / ChatGPT){RESET} [{ai_badge}]")
         print(f"  {YELLOW}[s]{RESET}  Chọn từ Repos của tôi {DIM}(Browse & Select My GitHub Repos){RESET}")
         print(f"  {YELLOW}[u]{RESET}  Chuyển Git User {DIM}(Switch Active GitHub Account: {len(accounts)} available){RESET}")
         print(f"  {YELLOW}[a]{RESET}  Thêm / Chuyển Repo khác {DIM}(Add any GitHub repo to monitor){RESET}")
@@ -182,6 +188,9 @@ def run_interactive_menu(engine, state_manager, config: Dict[str, Any]):
 
         elif raw in ("r", ""):
             continue
+
+        elif raw == "k":
+            _manage_ai_settings(config, engine)
 
         elif raw == "s":
             _browse_and_select_my_repos(config, repos)
@@ -221,6 +230,109 @@ def run_interactive_menu(engine, state_manager, config: Dict[str, Any]):
             else:
                 print(f"  {RED}Ký tự không hợp lệ — nhập số từ danh sách, hoặc s/u/a/c/m/w/p/r/q.{RESET}")
                 input("  Bấm Enter để tiếp tục...")
+
+
+def _manage_ai_settings(config: Dict[str, Any], engine):
+    """View and configure AI Provider, Model, and API Key."""
+    ai_conf = config.setdefault("ai", {})
+    from llm_client import LLMClient
+
+    while True:
+        clear_screen()
+        provider = ai_conf.get("provider", "gemini").lower()
+        model = ai_conf.get("model", "") or ("gemini-2.5-flash" if provider == "gemini" else "deepseek-chat" if provider == "deepseek" else "gpt-4o-mini")
+        raw_key = ai_conf.get("api_key", "") or os.environ.get("GEMINI_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "") or os.environ.get("DEEPSEEK_API_KEY", "")
+        masked_key = (raw_key[:6] + "..." + raw_key[-4:]) if len(raw_key) > 10 else ("Chưa có" if not raw_key else "******")
+        status = f"{GREEN}BẬT (Active){RESET}" if raw_key else f"{YELLOW}TẮT (Đang dùng 4 Subagents Rule-based cục bộ){RESET}"
+
+        print(f"{BLUE}{'='*70}{RESET}")
+        print(f"{BOLD}  🤖 CÀI ĐẶT AI REVIEW ENGINE & API KEY{RESET}")
+        print(f"{BLUE}{'='*70}{RESET}")
+        print(f"  Provider hiện tại : {CYAN}{provider.upper()}{RESET}")
+        print(f"  Model hiện tại    : {BOLD}{model}{RESET}")
+        print(f"  API Key           : {masked_key}")
+        print(f"  Trạng thái AI     : {status}\n")
+
+        print("  Các tùy chọn:")
+        print(f"    {YELLOW}[1]{RESET}  Đổi Provider (1: Google Gemini | 2: DeepSeek | 3: OpenAI)")
+        print(f"    {YELLOW}[2]{RESET}  Nhập / Đổi API Key")
+        print(f"    {YELLOW}[3]{RESET}  Đổi tên Model (ví dụ: gemini-2.5-flash, deepseek-chat, gpt-4o)")
+        print(f"    {YELLOW}[4]{RESET}  ⚡ Test kết nối AI (gửi ping test)")
+        print(f"    {YELLOW}[5]{RESET}  Xóa API Key (quay về chế độ Local Subagents)")
+        print(f"    {YELLOW}[b]{RESET}  Lưu & Quay lại menu chính\n")
+
+        sub = input(f"  {BOLD}Chọn thao tác [1-5/b]:{RESET} ").strip().lower()
+        if sub in ("b", ""):
+            engine.llm_client = LLMClient(
+                provider=ai_conf.get("provider", "gemini"),
+                api_key=ai_conf.get("api_key", ""),
+                model=ai_conf.get("model", "")
+            )
+            try:
+                with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                    json.dump(config, f, indent=2, ensure_ascii=False)
+            except Exception as e:
+                print(f"  {YELLOW}Không thể lưu file config: {e}{RESET}")
+            return
+
+        elif sub == "1":
+            print("\n  Chọn Provider:")
+            print("    [1] Google Gemini (Mặc định: gemini-2.5-flash)")
+            print("    [2] DeepSeek (Mặc định: deepseek-chat)")
+            print("    [3] OpenAI / ChatGPT (Mặc định: gpt-4o-mini)")
+            p_choice = input("  Chọn [1-3]: ").strip()
+            if p_choice == "1":
+                ai_conf["provider"] = "gemini"
+                ai_conf["model"] = "gemini-2.5-flash"
+            elif p_choice == "2":
+                ai_conf["provider"] = "deepseek"
+                ai_conf["model"] = "deepseek-chat"
+            elif p_choice == "3":
+                ai_conf["provider"] = "openai"
+                ai_conf["model"] = "gpt-4o-mini"
+
+        elif sub == "2":
+            key_input = input(f"\n  Dán {provider.upper()} API Key của bạn: ").strip()
+            if key_input:
+                ai_conf["api_key"] = key_input
+                print(f"  {GREEN}✅ Đã lưu API Key!{RESET}")
+                input("  Bấm Enter để tiếp tục...")
+
+        elif sub == "3":
+            model_input = input(f"\n  Nhập tên model (hiện tại: {model}): ").strip()
+            if model_input:
+                ai_conf["model"] = model_input
+                print(f"  {GREEN}✅ Đã cập nhật model thành {model_input}!{RESET}")
+                input("  Bấm Enter để tiếp tục...")
+
+        elif sub == "4":
+            print(f"\n  {CYAN}Đang test kết nối tới {provider.upper()} API...{RESET}")
+            test_client = LLMClient(
+                provider=ai_conf.get("provider", "gemini"),
+                api_key=ai_conf.get("api_key", ""),
+                model=ai_conf.get("model", "")
+            )
+            if not test_client.is_configured():
+                print(f"  {RED}Chưa cấu hình API Key. Vui lòng nhập key ở tùy chọn [2].{RESET}")
+            else:
+                try:
+                    res = test_client.generate_review(
+                        {"title": "Test Ping", "number": 1, "author": {"login": "test"}, "baseRefName": "main", "headRefName": "test"},
+                        "+ def ping():\n+     return 'pong'",
+                        "Ping test only."
+                    )
+                    if res:
+                        print(f"  {GREEN}✅ Kết nối AI thành công! Model {model} phản hồi tốt.{RESET}")
+                    else:
+                        print(f"  {RED}❌ Không nhận được phản hồi từ AI.{RESET}")
+                except Exception as err:
+                    print(f"  {RED}❌ Lỗi kết nối: {err}{RESET}")
+            input("  Bấm Enter để tiếp tục...")
+
+        elif sub == "5":
+            ai_conf["api_key"] = ""
+            print(f"  {YELLOW}Đã xóa API Key. Hệ thống sẽ dùng bộ 4 Subagents Rule-based cục bộ.{RESET}")
+            input("  Bấm Enter để tiếp tục...")
 
 
 def _switch_gh_user(accounts: List[str], current_user: Optional[str]):

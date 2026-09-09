@@ -314,8 +314,9 @@ class ResilienceQAAgent:
 # =============================================================================
 
 class ReviewEngine:
-    def __init__(self, state_manager=None):
+    def __init__(self, state_manager=None, llm_client=None):
         self.state = state_manager
+        self.llm_client = llm_client
         # Initialize the 4 specialized subagents
         self.subagents = [
             BackendReviewerAgent(),
@@ -323,6 +324,21 @@ class ReviewEngine:
             SecurityAuditorAgent(),
             ResilienceQAAgent()
         ]
+
+    def load_bundled_rules(self) -> str:
+        """Load all markdown rules from the bundled rules/ directory."""
+        rules_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rules")
+        content = []
+        if os.path.isdir(rules_dir):
+            for f in sorted(os.listdir(rules_dir)):
+                if f.endswith(".md"):
+                    p = os.path.join(rules_dir, f)
+                    try:
+                        with open(p, "r", encoding="utf-8") as fp:
+                            content.append(f"### RULE MODULE: {f}\n" + fp.read())
+                    except Exception:
+                        pass
+        return "\n\n".join(content)
 
     def run_command(self, cmd: List[str]) -> str:
         res = subprocess.run(cmd, capture_output=True, text=True)
@@ -566,12 +582,27 @@ class ReviewEngine:
             if last_sha and last_sha != commit_sha:
                 is_rereview = True
 
-        # Parse chunks and dispatch subagents
-        diff_chunks = self.parse_diff_chunks(diff)
-        files = [c["file"] for c in diff_chunks]
-        findings = self.dispatch_subagents(diff_chunks)
+        # 1. Try AI-powered Review (Gemini / DeepSeek / OpenAI) if configured
+        ai_body = None
+        if self.llm_client and self.llm_client.is_configured():
+            print(f"\n  {BOLD}🧠 Dispatching AI Reviewer ({self.llm_client.provider.upper()} - {self.llm_client.model})...{RESET}")
+            try:
+                rules_summary = self.load_bundled_rules()
+                ai_body = self.llm_client.generate_review(pr, diff, rules_summary)
+                if ai_body:
+                    print(f"  {GREEN}✨ AI Review generated successfully by {self.llm_client.provider.upper()}!{RESET}")
+            except Exception as e:
+                print(f"  {YELLOW}⚠️ AI generation failed ({e}). Falling back to local subagents.{RESET}")
 
-        body = self.generate_review_markdown(pr, files, findings, is_rereview=is_rereview, prev_sha=last_sha)
+        if ai_body:
+            body = ai_body
+            findings = []
+        else:
+            # 2. Fallback to Local 4 Subagent Pipeline
+            diff_chunks = self.parse_diff_chunks(diff)
+            files = [c["file"] for c in diff_chunks]
+            findings = self.dispatch_subagents(diff_chunks)
+            body = self.generate_review_markdown(pr, files, findings, is_rereview=is_rereview, prev_sha=last_sha)
 
         print(f"📝 Posting review to GitHub ({repo} PR #{pr_number})...")
         self.post_review(repo, pr_number, commit_sha, body, findings)
@@ -580,8 +611,9 @@ class ReviewEngine:
             self.state.record_review(repo, pr_number, commit_sha, {
                 "time": datetime.now(timezone.utc).isoformat(),
                 "findings_count": len(findings),
-                "is_rereview": is_rereview
+                "is_rereview": is_rereview,
+                "engine": self.llm_client.provider if (self.llm_client and self.llm_client.is_configured() and ai_body) else "local_subagents"
             })
 
-        print(f"✅ Multi-Agent review completed for {repo} PR #{pr_number}!")
+        print(f"✅ Review completed for {repo} PR #{pr_number}!")
         return {"status": "success", "findings": len(findings), "commit": commit_sha}
