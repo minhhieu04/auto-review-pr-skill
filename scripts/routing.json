@@ -1,0 +1,137 @@
+{
+  "routing_rules": {
+    "backend_python": {
+      "patterns": ["*.py"],
+      "exclude": ["**/migrations/**", "**/__pycache__/**", "**/test_*.py", "**/*_test.py"],
+      "skills": ["code-review", "database-expert", "rest-api-expert", "auth-expert", "refactoring-expert", "defense-in-depth"],
+      "agent": "Backend Architecture Reviewer"
+    },
+    "backend_migrations": {
+      "patterns": ["**/migrations/*.py"],
+      "skills": ["postgres-expert", "database-expert"],
+      "agent": "Backend Architecture Reviewer"
+    },
+    "backend_models": {
+      "patterns": ["**/models.py", "**/models/*.py"],
+      "skills": ["database-expert", "postgres-expert"],
+      "agent": "Backend Architecture Reviewer"
+    },
+    "backend_schema": {
+      "patterns": ["**/schema.py", "**/schema/*.py"],
+      "skills": ["database-expert", "rest-api-expert"],
+      "agent": "Backend Architecture Reviewer"
+    },
+    "frontend_react": {
+      "patterns": ["*.jsx", "*.tsx"],
+      "exclude": ["**/*.test.*", "**/*.spec.*"],
+      "skills": ["react-expert", "react-performance", "accessibility-expert", "refactoring-expert"],
+      "agent": "Frontend Performance Reviewer"
+    },
+    "frontend_typescript": {
+      "patterns": ["*.ts", "*.tsx"],
+      "exclude": ["**/*.test.*", "**/*.spec.*"],
+      "skills": ["typescript-expert"],
+      "agent": "Frontend Performance Reviewer"
+    },
+    "frontend_state": {
+      "patterns": ["**/store/**", "**/stores/**", "**/hooks/**", "**/*Store.*", "**/*Pager.*", "**/*Cache.*"],
+      "skills": ["state-management-expert"],
+      "agent": "Frontend Performance Reviewer"
+    },
+    "frontend_css": {
+      "patterns": ["*.css", "*.scss", "*.less"],
+      "skills": ["css-expert"],
+      "agent": "Frontend Performance Reviewer"
+    },
+    "testing": {
+      "patterns": ["*.test.*", "*.spec.*", "**/__tests__/**"],
+      "skills": ["testing-expert", "testing-anti-patterns"],
+      "agent": "Resilience & Edge-Case Reviewer"
+    },
+    "e2e_testing": {
+      "patterns": ["**/e2e/**", "**/*.e2e.*"],
+      "skills": ["playwright-expert"],
+      "agent": "Resilience & Edge-Case Reviewer"
+    },
+    "docker": {
+      "patterns": ["Dockerfile*", "docker-compose*", ".dockerignore"],
+      "skills": ["docker-expert"],
+      "agent": "Resilience & Edge-Case Reviewer"
+    },
+    "ci_cd": {
+      "patterns": [".github/workflows/*.yml", ".github/workflows/*.yaml"],
+      "skills": ["github-actions-expert"],
+      "agent": "Resilience & Edge-Case Reviewer"
+    }
+  },
+  "always_active_skills": [
+    "code-review",
+    "refactoring-expert",
+    "defense-in-depth",
+    "verification-before-completion"
+  ],
+  "skip_files": [
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "*.min.js",
+    "*.min.css",
+    "*.map",
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+    "*.gif",
+    "*.svg",
+    "*.ico",
+    "*.woff",
+    "*.woff2",
+    "*.ttf",
+    "*.eot",
+    "*.pyc",
+    "**/__pycache__/**",
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/.next/**"
+  ],
+  "review_config": {
+    "max_inline_suggestions": 10,
+    "max_diff_lines": 3000,
+    "severity_levels": {
+      "critical": {
+        "emoji": "🔴",
+        "label": "Critical",
+        "action": "Must fix before merge"
+      },
+      "major": {
+        "emoji": "🟡",
+        "label": "Major",
+        "action": "Should fix"
+      },
+      "minor": {
+        "emoji": "🟢",
+        "label": "Minor",
+        "action": "Nice to have"
+      },
+      "suggestion": {
+        "emoji": "💡",
+        "label": "Suggestion",
+        "action": "Consider alternative"
+      }
+    },
+    "verdict_rules": {
+      "approve": "No Critical AND no Major issues",
+      "comment": "Has Major but no Critical issues",
+      "request_changes": "Has Critical issues"
+    }
+  },
+  "defaults": {
+    "org": "deveop-com",
+    "repos": {
+      "be": "clickessms_be",
+      "fe": "clickessms_fe"
+    },
+    "comment_language": "english",
+    "auto_approve": false
+  }
+}
