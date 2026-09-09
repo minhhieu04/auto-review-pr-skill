@@ -45,18 +45,20 @@ def resolve_repo(repo_input: str, config: dict) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="Automated PR Code Review Bot")
-    parser.add_argument("--mode", choices=["poll", "webhook", "both"], default="poll",
+    parser.add_argument("--mode", choices=["poll", "webhook", "both"], default=None,
                         help="Mode to run: poll (daemon), webhook (server), or both")
     parser.add_argument("--tunnel", action="store_true",
                         help="Start Cloudflare Tunnel to expose webhook server publicly")
     parser.add_argument("--port", type=int, default=None,
-                        help="Port for webhook server (default: 8080)")
+                        help="Port for webhook server (default: 8765)")
     parser.add_argument("--interval", type=int, default=None,
                         help="Polling interval in seconds (default: 60)")
     parser.add_argument("--pr", type=int, default=None,
                         help="Run manual review on a specific PR number and exit")
     parser.add_argument("--repo", type=str, default="be",
                         help="Repository key ('be', 'fe') or full name ('deveop-com/clickessms_be')")
+    parser.add_argument("--menu", action="store_true",
+                        help="Launch interactive PR review dashboard menu")
 
     args = parser.parse_args()
     config = load_config()
@@ -71,7 +73,13 @@ def main():
         engine.execute_review(target_repo, args.pr)
         sys.exit(0)
 
-    port = args.port or config.get("webhook", {}).get("port", 8080)
+    # Interactive menu if no mode specified or --menu flag
+    if args.menu or (args.mode is None and not args.tunnel):
+        from interactive_menu import run_interactive_menu
+        run_interactive_menu(engine, state, config)
+        sys.exit(0)
+
+    port = args.port or config.get("webhook", {}).get("port", 8765)
     interval = args.interval or config.get("poll_interval_seconds", 60)
     repos = config.get("monitored_repos", [])
 
