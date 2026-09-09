@@ -1,21 +1,32 @@
 # 🤖 Universal PR-Agent & Antigravity Auto-Review System
 
-> **Hệ thống tự động review Pull Request độc lập và mở rộng cho MỌI dự án GitHub.**  
+> **Hệ thống tự động review Pull Request độc lập, đa tài khoản, đa kiến trúc Subagents cho MỌI dự án GitHub.**  
 > Kết hợp tiêu chuẩn **[Google Engineering Practices](https://google.github.io/eng-practices/review/)** + kiến trúc **[PR-Agent](https://github.com/the-pr-agent/pr-agent)** + **Antigravity AI** (Google Ultra).
 
 ---
 
 ## 🌟 Tính Năng Đột Phá — Độc Lập & Scale Toàn Diện
 
-1. **100% Độc Lập (Self-Contained Knowledge Base)**:
-   - Không phụ thuộc vào bất kỳ skill cài ngoài nào trên máy cá nhân!
-   - Toàn bộ tri thức review (Backend, Frontend, Security, Testing, Google Standards) được đóng gói sẵn trong thư mục `rules/` của repository này.
-   - Bất kỳ ai clone về máy (dù chưa từng cài skill nào) đều có 100% sức mạnh review chuẩn tech lead.
+1. **Kiến Trúc Multi-Subagents Song Song (Parallel Specialized Agents)**:
+   - Thay vì 1 reviewer chung chung, hệ thống điều phối **4 Subagents chuyên môn hóa chạy song song**:
+     - ⚙️ **Backend Reviewer Subagent**: ORM, N+1 queries, SQL Injection, API boundaries, migrations.
+     - 🎨 **Frontend Performance Subagent**: React hooks, re-renders, layout CSS sticky/overflow, TypeScript, A11y.
+     - 🛡️ **Security Auditor Subagent**: Rà soát secrets, API keys, AWS keys, Private keys, TLS/SSL verify.
+     - 🧪 **Resilience & QA Subagent**: Anti-patterns trong test, sleep delays, Docker unpinned tags, edge-cases.
+   - Các subagents chạy đồng thời và gắn thẻ `[Agent Name]` vào từng issue tìm thấy trên GitHub!
 
-2. **Dùng Cho Mọi Dự Án (Project-Agnostic & Auto-Detect)**:
-   - **Tự động nhận diện Git repo**: Nếu mở terminal trong bất kỳ thư mục dự án nào, bot tự động nhận diện `owner/repo` qua git remote và ưu tiên hiển thị.
-   - **Thêm repo tùy ý qua Menu**: Bấm `[a]` để gõ hoặc dán link bất kỳ GitHub repo nào (`facebook/react`, `owner/my-service`, etc.).
-   - Hỗ trợ đa ngôn ngữ: Python (Django, FastAPI), TypeScript/JavaScript (React, Next.js, Node/Nest), Go, Java, Docker, SQL...
+2. **Quản Lý Nhiều Tài Khoản Git (Multi-Account Switcher & Repo Browser)**:
+   - Tự động nhận diện nếu máy có **nhiều tài khoản GitHub** (cá nhân, công ty...).
+   - **`[u] Chuyển Git User`**: Chuyển tài khoản active tức thì qua `gh auth switch`.
+   - **`[s] Chọn từ Repos của tôi`**: Tự động tải danh sách toàn bộ repos của user đó để chọn review ngay với 1 phím bấm!
+
+3. **100% Độc Lập (Self-Contained Knowledge Base)**:
+   - Toàn bộ tri thức review (5 gói `rules/`) được nhúng trực tiếp trong repo.
+   - Người khác clone về máy là dùng được ngay, **không cần cài thêm bất kỳ skill ngoài nào**.
+
+4. **Dùng Cho Mọi Dự Án (Project-Agnostic & Auto-Detect)**:
+   - **Tự động nhận diện Git repo**: Mở terminal ở bất kỳ thư mục dự án nào, bot tự động nhận diện `owner/repo`.
+   - **Thêm repo tùy ý qua Menu `[a]`**: Nhập hoặc paste link bất kỳ GitHub repo nào.
 
 ---
 
@@ -28,9 +39,6 @@
 | **GitHub CLI** | `gh` 2.0+ — đã chạy `gh auth login` với quyền `repo` |
 | **Antigravity IDE** | Bản mới nhất (dùng Google Ultra quota để review AI thông minh nhất) |
 | **cloudflared** | Tùy chọn — chỉ cần nếu bật Webhook + Cloudflare Tunnel |
-
-> **Máy người khác dùng được ngay:**  
-> Bot tự động nhận diện user qua `gh api user` và tự động lấy repo hiện tại. Đồng nghiệp chỉ cần `gh auth login` tài khoản của họ là chạy được ngay!
 
 ---
 
@@ -47,20 +55,7 @@ cd auto-review-pr-skill
 # macOS
 brew install gh
 gh auth login
-# Chọn: GitHub.com -> SSH/HTTPS -> Đăng nhập
-```
-
-### 3. Cấu hình danh sách repo theo dõi (`bot/bot_config.json`)
-Bạn có thể cấu hình trước các repo thường dùng, hoặc thêm trực tiếp trên giao diện:
-```json
-{
-  "monitored_repos": [
-    "owner/repo-backend",
-    "owner/repo-frontend"
-  ],
-  "poll_interval_seconds": 60,
-  "webhook": { "port": 8765 }
-}
+# Chọn: GitHub.com -> SSH/HTTPS -> Đăng nhập (có thể add nhiều tài khoản)
 ```
 
 ---
@@ -72,16 +67,16 @@ Hệ thống được nhúng sẵn 5 gói quy tắc chuyên sâu, không cần c
 | Gói Quy Tắc | File | Nội Dung Trọng Tâm |
 |:------------|:-----|:-------------------|
 | **Google Standards** | `rules/01_google_engineering_practices.md` | 10 tiêu chí đánh giá Google, quy tắc viết nhận xét lịch sự, logic phán quyết APPROVE / COMMENT / REQUEST_CHANGES. |
-| **Backend & ORM** | `rules/02_backend_architecture.md` | N+1 queries, Django/TypeORM/Prisma, migration table locks, API validation, transaction boundaries. |
+| **Backend & ORM** | `rules/02_backend_architecture.md` | N+1 queries, Django/TypeORM/Prisma/SQLAlchemy, migration table locks, API validation, transaction boundaries. |
 | **Frontend & UI/UX** | `rules/03_frontend_architecture.md` | React hooks rules, dependency array, unnecessary re-renders, sticky + overflow bug, WCAG 2.1 AA accessibility. |
 | **Security & Defense** | `rules/04_security_and_defense.md` | Phát hiện lộ API Keys/Tokens/Private Keys, SQL Injection, XSS, Defense-in-depth 3 tầng. |
-| **Testing & Resilience** | `rules/05_testing_and_resilience.md` | Anti-patterns (không test mock), cấm sleep/setTimeout hardcoded, race conditions, timeout handling. |
+| **Testing & Resilience** | `rules/05_testing_and_resilience.md` | Anti-patterns (không test mock), loại bỏ sleep/setTimeout hardcoded, race conditions, timeout handling. |
 
 ---
 
 ## 🚀 Các Chế Độ Vận Hành
 
-### Chế Độ 1: Interactive Dashboard (Khuyên Dùng)
+### Chế Độ 1: Universal Dashboard (Khuyên Dùng)
 Double-click `ReviewBot.app` trên Desktop, hoặc chạy:
 ```bash
 python3 bot/bot.py --menu
@@ -92,7 +87,7 @@ python3 bot/bot.py --menu
 ======================================================================
     ANTIGRAVITY & PR-AGENT — UNIVERSAL CODE REVIEW DASHBOARD
 ======================================================================
-  User: @minhhieu04 | Current Dir Repo: deveop-com/clickessms_be
+  Git User: @minhhieu04 (Active) | Current Dir: deveop-com/clickessms_be
   Loading open PRs...
 
   📦 DEVEOP-COM/CLICKESSMS_BE [current dir]
@@ -101,6 +96,8 @@ python3 bot/bot.py --menu
   [ 2] #918  feat(PW2-977): warning to calculation   @nguyennhatninh
 
   OTHER OPTIONS:
+  [s]  Chọn từ Repos của tôi (Browse & Select My GitHub Repos)
+  [u]  Chuyển Git User (Switch Active GitHub Account)
   [a]  Thêm / Chuyển Repo khác (Add any GitHub repo to monitor)
   [c]  Custom PR number (nhập số PR & repo thủ công)
   [m]  Review NHIỀU PR cùng lúc (vd: 1 3 5)
@@ -112,9 +109,10 @@ python3 bot/bot.py --menu
 ```
 
 **Tính Năng Tiện Lợi:**
-- **Thêm Repo tùy ý `[a]`**: Nhập bất kỳ repo GitHub nào để nạp danh sách PR ngay.
-- **Review hàng loạt `[m]`**: Gõ `1 3 5` → Bot tự động review lần lượt và in bảng tổng kết.
-- **Tự sửa khi nhập sai**: Nhập sai ký tự → hệ thống nhắc nhập lại ngay tại chỗ, không reload lại toàn bộ menu.
+- **`[s] Repos của tôi`**: Xem toàn bộ repositories của tài khoản hiện tại, bấm số để chọn ngay.
+- **`[u] Đổi Git User`**: Chuyển đổi giữa các tài khoản GitHub đã đăng nhập trên máy chỉ bằng 1 thao tác.
+- **`[m] Review nhiều PR`**: Gõ `1 3 5` → Bot tự động điều phối các subagents review tuần tự.
+- **Tự sửa khi gõ sai**: Nhập sai ký tự → nhắc nhập lại tại chỗ, không reload lại toàn bộ menu.
 
 ---
 
@@ -147,7 +145,7 @@ review pr 918
 review pr 123 in facebook/react
 re-review pr 916
 ```
-AI sẽ tự động đọc `SKILL.md` và các gói `rules/*.md` để phân tích sâu từng dòng code và đề xuất code suggestion chuẩn chỉ.
+AI sẽ tự động dispatch các subagent tương ứng và áp dụng các gói `rules/*.md` để phân tích sâu từng dòng code và đề xuất code suggestion chuẩn chỉ.
 
 ---
 
@@ -166,8 +164,8 @@ auto-review-pr-skill/
 ├── bot/
 │   ├── bot.py                # Entrypoint CLI & routing thông minh
 │   ├── bot_config.json       # File cấu hình repo & port
-│   ├── interactive_menu.py   # Dashboard tương tác, auto-detect git
-│   ├── review_engine.py      # Bộ quét lỗi đa ngôn ngữ (Python, JS/TS, Security)
+│   ├── interactive_menu.py   # Dashboard tương tác, multi-user, repo browser
+│   ├── review_engine.py      # Bộ điều phối 4 Subagents (Backend, Frontend, Sec, QA)
 │   ├── polling_daemon.py     # Quét định kỳ (All / Reviewer / Assignee)
 │   ├── webhook_server.py     # HTTP Server nhận Webhook GitHub
 │   ├── tunnel_manager.py     # Quản lý Cloudflare Tunnel

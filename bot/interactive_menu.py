@@ -3,8 +3,7 @@ import sys
 import json
 import re
 import subprocess
-import threading
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 # ANSI Color codes
 BOLD = "\033[1m"
@@ -33,6 +32,41 @@ def detect_current_repo() -> Optional[str]:
         pass
     return None
 
+def get_gh_accounts() -> Tuple[List[str], Optional[str]]:
+    """Detect all logged in accounts from gh auth status and the active account."""
+    accounts = []
+    active_user = None
+    try:
+        res = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True)
+        out = res.stdout + "\n" + res.stderr
+        current_acc = None
+        for line in out.splitlines():
+            m = re.search(r"account\s+([\w\-]+)", line)
+            if m:
+                current_acc = m.group(1)
+                if current_acc not in accounts:
+                    accounts.append(current_acc)
+            if "Active account: true" in line and current_acc:
+                active_user = current_acc
+    except Exception:
+        pass
+    if not active_user and accounts:
+        active_user = accounts[0]
+    return accounts, active_user
+
+def fetch_user_repos(limit: int = 25) -> List[Dict[str, Any]]:
+    """Fetch repos accessible to the currently active GitHub user."""
+    try:
+        res = subprocess.run([
+            "gh", "repo", "list",
+            "--limit", str(limit),
+            "--json", "nameWithOwner,isPrivate,description,updatedAt"
+        ], capture_output=True, text=True, check=True)
+        return json.loads(res.stdout)
+    except Exception as e:
+        print(f"{YELLOW}⚠️ Cannot fetch user repos: {e}{RESET}")
+        return []
+
 def fetch_open_prs(repo: str, limit: int = 8, assigned_to: Optional[str] = None) -> List[Dict[str, Any]]:
     """Fetch open PRs using gh CLI. Optionally filter by assignee."""
     cmd = [
@@ -50,14 +84,6 @@ def fetch_open_prs(repo: str, limit: int = 8, assigned_to: Optional[str] = None)
     except Exception as e:
         print(f"{YELLOW}⚠️  Cannot fetch PRs from {repo}: {e}{RESET}")
         return []
-
-def fetch_current_gh_user() -> str:
-    try:
-        res = subprocess.run(["gh", "api", "user", "--jq", ".login"],
-                             capture_output=True, text=True, check=True)
-        return res.stdout.strip()
-    except Exception:
-        return ""
 
 def open_pr_in_browser(repo: str, pr_number: int):
     try:
@@ -77,7 +103,6 @@ def run_interactive_menu(engine, state_manager, config: Dict[str, Any]):
     repos = list(config.get("monitored_repos", []))
     org = config.get("org", "deveop-com")
     repos_map = config.get("repos", {"be": "clickessms_be", "fe": "clickessms_fe"})
-    current_user = fetch_current_gh_user()
 
     # Auto-detect repo if running inside a git directory
     detected_repo = detect_current_repo()
@@ -89,23 +114,26 @@ def run_interactive_menu(engine, state_manager, config: Dict[str, Any]):
 
     while True:
         clear_screen()
+        accounts, current_user = get_gh_accounts()
+
         print(f"{BLUE}======================================================================{RESET}")
         print(f"{GREEN}{BOLD}    ANTIGRAVITY & PR-AGENT — UNIVERSAL CODE REVIEW DASHBOARD{RESET}")
         print(f"{BLUE}======================================================================{RESET}")
+
         header_info = []
         if current_user:
-            header_info.append(f"User: {CYAN}@{current_user}{RESET}")
+            acc_count_badge = f" ({len(accounts)} accounts)" if len(accounts) > 1 else ""
+            header_info.append(f"Git User: {CYAN}@{current_user}{RESET}{DIM}{acc_count_badge}{RESET}")
         if detected_repo:
-            header_info.append(f"Current Dir Repo: {GREEN}{detected_repo}{RESET}")
+            header_info.append(f"Current Dir: {GREEN}{detected_repo}{RESET}")
         if header_info:
-            print(f"  {DIM}{' | '.join(header_info)}{RESET}")
+            print(f"  {' | '.join(header_info)}")
             print(f"  {DIM}Loading open PRs...{RESET}")
 
         pr_options: List[Dict[str, Any]] = []
         option_index = 1
 
         for repo in repos:
-            repo_short = repo.split("/")[-1]
             is_curr = f" {GREEN}[current dir]{RESET}" if repo == detected_repo else ""
             print(f"\n  {BOLD}📦 {repo.upper()}{RESET}{is_curr}")
             print(f"  {'─' * 66}")
@@ -134,6 +162,8 @@ def run_interactive_menu(engine, state_manager, config: Dict[str, Any]):
 
         print(f"\n{BLUE}  {'─' * 66}{RESET}")
         print(f"{BOLD}  OTHER OPTIONS:{RESET}")
+        print(f"  {YELLOW}[s]{RESET}  Chọn từ Repos của tôi {DIM}(Browse & Select My GitHub Repos){RESET}")
+        print(f"  {YELLOW}[u]{RESET}  Chuyển Git User {DIM}(Switch Active GitHub Account: {len(accounts)} available){RESET}")
         print(f"  {YELLOW}[a]{RESET}  Thêm / Chuyển Repo khác {DIM}(Add any GitHub repo to monitor){RESET}")
         print(f"  {YELLOW}[c]{RESET}  Custom PR number {DIM}(nhập số PR & repo thủ công){RESET}")
         print(f"  {YELLOW}[m]{RESET}  Review NHIỀU PR cùng lúc {DIM}(vd: 1 3 5){RESET}")
@@ -153,6 +183,12 @@ def run_interactive_menu(engine, state_manager, config: Dict[str, Any]):
         elif raw in ("r", ""):
             continue
 
+        elif raw == "s":
+            _browse_and_select_my_repos(config, repos)
+
+        elif raw == "u":
+            _switch_gh_user(accounts, current_user)
+
         elif raw == "a":
             _add_new_repo(config, repos)
 
@@ -169,7 +205,6 @@ def run_interactive_menu(engine, state_manager, config: Dict[str, Any]):
             _run_multi_pr(engine, pr_options)
 
         else:
-            # Parse space-separated numbers for multi-select or single digit
             tokens = raw.split()
             if all(t.isdigit() for t in tokens) and tokens:
                 indices = [int(t) for t in tokens]
@@ -184,8 +219,98 @@ def run_interactive_menu(engine, state_manager, config: Dict[str, Any]):
                 elif len(matched) > 1:
                     _run_multi_pr_list(engine, matched)
             else:
-                print(f"  {RED}Ký tự không hợp lệ — nhập số từ danh sách, hoặc a/c/m/w/p/r/q.{RESET}")
+                print(f"  {RED}Ký tự không hợp lệ — nhập số từ danh sách, hoặc s/u/a/c/m/w/p/r/q.{RESET}")
                 input("  Bấm Enter để tiếp tục...")
+
+
+def _switch_gh_user(accounts: List[str], current_user: Optional[str]):
+    """Switch active GitHub user account using gh auth switch."""
+    clear_screen()
+    print(f"{BLUE}{'='*70}{RESET}")
+    print(f"{BOLD}  CHUYỂN TÀI KHOẢN GITHUB ACTIVE (MULTI-ACCOUNT SWITCHER){RESET}")
+    print(f"{BLUE}{'='*70}{RESET}")
+
+    if not accounts:
+        print(f"  {YELLOW}Chưa phát hiện tài khoản GitHub nào đăng nhập qua gh CLI.{RESET}")
+        print("  Để đăng nhập, chạy: gh auth login")
+        input("\n  Bấm Enter để quay lại...")
+        return
+
+    print(f"  Tài khoản đang active: {GREEN}@{current_user}{RESET}\n")
+    print("  Danh sách tài khoản trên máy:")
+    for idx, acc in enumerate(accounts, 1):
+        is_active = f" {GREEN}[ACTIVE]{RESET}" if acc == current_user else ""
+        print(f"    {YELLOW}[{idx}]{RESET} @{acc}{is_active}")
+
+    print(f"\n  {DIM}Tip: Để thêm tài khoản mới vào máy, chạy 'gh auth login' trong terminal.{RESET}")
+    print("  Nhập số thứ tự tài khoản muốn chuyển sang (hoặc Enter để hủy):")
+
+    while True:
+        choice = input(f"\n  {BOLD}Chọn tài khoản [1-{len(accounts)}]:{RESET} ").strip()
+        if not choice:
+            return
+        if choice.isdigit() and 1 <= int(choice) <= len(accounts):
+            target_user = accounts[int(choice) - 1]
+            if target_user == current_user:
+                print(f"  {YELLOW}Tài khoản @{target_user} đã là active rồi!{RESET}")
+                input("  Bấm Enter để quay lại...")
+                return
+            print(f"\n  {CYAN}Đang chuyển active account sang @{target_user}...{RESET}")
+            res = subprocess.run(["gh", "auth", "switch", "--user", target_user], capture_output=True, text=True)
+            if res.returncode == 0:
+                print(f"  {GREEN}✅ Đã chuyển thành công sang tài khoản @{target_user}!{RESET}")
+            else:
+                print(f"  {RED}Lỗi khi chuyển tài khoản: {res.stderr}{RESET}")
+            input("\n  Bấm Enter để quay lại menu...")
+            return
+        print(f"  {RED}Lựa chọn không hợp lệ, vui lòng thử lại.{RESET}")
+
+
+def _browse_and_select_my_repos(config: Dict[str, Any], repos: List[str]):
+    """Browse repos of the active user and add to monitored list."""
+    clear_screen()
+    print(f"{BLUE}{'='*70}{RESET}")
+    print(f"{BOLD}  DANH SÁCH REPOSITORIES CỦA BẠN (GITHUB REPO BROWSER){RESET}")
+    print(f"{BLUE}{'='*70}{RESET}")
+    print(f"  {DIM}Đang tải danh sách repo từ GitHub...{RESET}\n")
+
+    user_repos = fetch_user_repos(limit=30)
+    if not user_repos:
+        print(f"  {YELLOW}Không tìm thấy repo nào hoặc không thể kết nối GitHub.{RESET}")
+        input("\n  Bấm Enter để quay lại...")
+        return
+
+    for idx, r in enumerate(user_repos, 1):
+        badge = f"{MAGENTA}[private]{RESET}" if r.get("isPrivate") else f"{DIM}[public]{RESET}"
+        name = r["nameWithOwner"]
+        is_monitored = f" {GREEN}✓ đang theo dõi{RESET}" if name in repos else ""
+        print(f"  {YELLOW}[{idx:>2}]{RESET} {name:<40} {badge}{is_monitored}")
+
+    print(f"\n{BLUE}  {'─' * 66}{RESET}")
+    print(f"  {DIM}Nhập số thứ tự để THÊM vào danh sách theo dõi (nhập nhiều số cách nhau bằng dấu cách).{RESET}")
+    choice = input(f"  {BOLD}Chọn repo [1-{len(user_repos)}] (hoặc Enter để hủy):{RESET} ").strip()
+    if not choice:
+        return
+
+    tokens = choice.split()
+    if all(t.isdigit() for t in tokens):
+        added = []
+        for t in tokens:
+            val = int(t)
+            if 1 <= val <= len(user_repos):
+                picked_name = user_repos[val - 1]["nameWithOwner"]
+                if picked_name not in repos:
+                    repos.append(picked_name)
+                    added.append(picked_name)
+        if added:
+            save_monitored_repos(config, repos)
+            print(f"\n  {GREEN}✅ Đã thêm {len(added)} repo vào danh sách theo dõi: {', '.join(added)}{RESET}")
+        else:
+            print(f"\n  {YELLOW}Các repo đã chọn đều đã có trong danh sách.{RESET}")
+    else:
+        print(f"  {RED}Lựa chọn không hợp lệ.{RESET}")
+
+    input("\n  Bấm Enter để quay lại menu...")
 
 
 def _add_new_repo(config: Dict[str, Any], repos: List[str]):
@@ -202,7 +327,6 @@ def _add_new_repo(config: Dict[str, Any], repos: List[str]):
         if not repo_input:
             return
 
-        # Parse GitHub URL if pasted
         m = re.search(r"github\.com[:/]([\w\-]+)/([\w\-]+?)(?:\.git)?$", repo_input)
         if m:
             clean_repo = f"{m.group(1)}/{m.group(2)}"
@@ -212,7 +336,6 @@ def _add_new_repo(config: Dict[str, Any], repos: List[str]):
             print(f"  {RED}Định dạng không đúng. Cần dạng 'owner/repo' (ví dụ: deveop-com/clickessms_be){RESET}")
             continue
 
-        # Check if repo is accessible via gh
         print(f"  {DIM}Đang kiểm tra quyền truy cập repo {clean_repo}...{RESET}")
         res = subprocess.run(["gh", "repo", "view", clean_repo, "--json", "name"], capture_output=True, text=True)
         if res.returncode != 0:
