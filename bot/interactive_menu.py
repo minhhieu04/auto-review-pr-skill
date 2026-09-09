@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import subprocess
+import threading
 from typing import List, Dict, Any, Optional
 
 # ANSI Color codes
@@ -12,64 +13,92 @@ CYAN = "\033[0;36m"
 YELLOW = "\033[1;33m"
 RED = "\033[0;31m"
 DIM = "\033[2m"
+MAGENTA = "\033[0;35m"
 RESET = "\033[0m"
 
 def clear_screen():
     os.system("clear" if os.name != "nt" else "cls")
 
-def fetch_open_prs(repo: str, limit: int = 5) -> List[Dict[str, Any]]:
-    """Fetch open PRs using gh CLI."""
+def fetch_open_prs(repo: str, limit: int = 8, assigned_to: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Fetch open PRs using gh CLI. Optionally filter by assignee."""
+    cmd = [
+        "gh", "pr", "list",
+        "--repo", repo,
+        "--state", "open",
+        "--limit", str(limit),
+        "--json", "number,title,author,assignees,headRefName,updatedAt"
+    ]
+    if assigned_to:
+        cmd += ["--assignee", assigned_to]
     try:
-        res = subprocess.run([
-            "gh", "pr", "list",
-            "--repo", repo,
-            "--state", "open",
-            "--limit", str(limit),
-            "--json", "number,title,author,headRefName,updatedAt"
-        ], capture_output=True, text=True, check=True)
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
         return json.loads(res.stdout)
     except Exception as e:
-        print(f"{YELLOW}⚠️ Không thể lấy danh sách PR từ {repo}: {e}{RESET}")
+        print(f"{YELLOW}⚠️  Cannot fetch PRs from {repo}: {e}{RESET}")
         return []
+
+def fetch_current_gh_user() -> str:
+    try:
+        res = subprocess.run(["gh", "api", "user", "--jq", ".login"],
+                             capture_output=True, text=True, check=True)
+        return res.stdout.strip()
+    except Exception:
+        return ""
 
 def open_pr_in_browser(repo: str, pr_number: int):
     try:
         subprocess.run(["gh", "pr", "view", str(pr_number), "--repo", repo, "--web"], check=True)
     except Exception as e:
-        print(f"{RED}Không thể mở trình duyệt: {e}{RESET}")
+        print(f"{RED}Cannot open browser: {e}{RESET}")
+
+def _input_valid(prompt: str, valid_values: Optional[List[str]] = None, allow_digits: bool = False) -> str:
+    """Keep asking until we get a valid input. Never restarts the full menu."""
+    while True:
+        val = input(prompt).strip().lower()
+        if valid_values is not None and val not in valid_values:
+            if allow_digits and val.isdigit():
+                return val
+            print(f"  {RED}Ký tự không hợp lệ, vui lòng nhập lại.{RESET}")
+            continue
+        return val
 
 def run_interactive_menu(engine, state_manager, config: Dict[str, Any]):
     repos = config.get("monitored_repos", ["deveop-com/clickessms_be", "deveop-com/clickessms_fe"])
     org = config.get("org", "deveop-com")
     repos_map = config.get("repos", {"be": "clickessms_be", "fe": "clickessms_fe"})
+    current_user = fetch_current_gh_user()
 
     while True:
         clear_screen()
         print(f"{BLUE}======================================================================{RESET}")
-        print(f"{GREEN}{BOLD}    🤖 ANTIGRAVITY & PR-AGENT — INTERACTIVE REVIEW DASHBOARD{RESET}")
+        print(f"{GREEN}{BOLD}    ANTIGRAVITY & PR-AGENT — INTERACTIVE REVIEW DASHBOARD{RESET}")
         print(f"{BLUE}======================================================================{RESET}")
-        print(f"{DIM}Đang tải danh sách PR mới nhất từ GitHub...{RESET}")
+        if current_user:
+            print(f"  {DIM}Logged in as: {current_user} | Loading latest PRs...{RESET}")
 
-        pr_options = []
+        pr_options: List[Dict[str, Any]] = []
         option_index = 1
 
         for repo in repos:
             repo_short = repo.split("/")[-1]
-            icon = "📦" if "be" in repo_short else "🎨"
-            print(f"\n{BOLD}{icon} {repo_short.upper()}{RESET} ({repo})")
+            icon = "BE" if "be" in repo_short else "FE"
+            print(f"\n  {BOLD}[{icon}] {repo_short.upper()}{RESET}  {DIM}({repo}){RESET}")
+            print(f"  {'─' * 66}")
 
-            prs = fetch_open_prs(repo, limit=5)
+            prs = fetch_open_prs(repo, limit=8)
             if not prs:
-                print(f"  {DIM}(Không có PR nào đang mở){RESET}")
+                print(f"  {DIM}(No open PRs){RESET}")
                 continue
 
             for pr in prs:
-                author = pr.get("author", {}).get("login", "unknown")
+                author = pr.get("author", {}).get("login", "?")
                 title = pr.get("title", "")
-                if len(title) > 55:
-                    title = title[:52] + "..."
-                
-                print(f"  {YELLOW}[{option_index}]{RESET} #{pr['number']:<5} {CYAN}{title:<56}{RESET} {DIM}@{author}{RESET}")
+                title_display = title[:53] + "..." if len(title) > 56 else title
+                # Mark PRs assigned to current user
+                assignees = [a.get("login", "") for a in pr.get("assignees", [])]
+                mine_tag = f" {GREEN}[mine]{RESET}" if current_user and current_user in assignees else ""
+
+                print(f"  {YELLOW}[{option_index:>2}]{RESET} #{pr['number']:<5} {CYAN}{title_display:<56}{RESET} {DIM}@{author}{RESET}{mine_tag}")
                 pr_options.append({
                     "index": option_index,
                     "repo": repo,
@@ -79,83 +108,207 @@ def run_interactive_menu(engine, state_manager, config: Dict[str, Any]):
                 })
                 option_index += 1
 
-        print(f"\n{BLUE}----------------------------------------------------------------------{RESET}")
-        print(f"{BOLD}⚡ TÙY CHỌN KHÁC:{RESET}")
-        print(f"  {YELLOW}[c]{RESET} Nhập số PR bất kỳ bằng tay (Custom PR number)")
-        print(f"  {YELLOW}[w]{RESET} Bật Webhook Server + Cloudflare Tunnel (Lắng nghe sự kiện từ GitHub)")
-        print(f"  {YELLOW}[p]{RESET} Bật Polling Daemon (Tự động quét PR mỗi 60s)")
-        print(f"  {YELLOW}[r]{RESET} Làm mới danh sách PR (Refresh)")
-        print(f"  {YELLOW}[q]{RESET} Thoát")
+        print(f"\n{BLUE}  {'─' * 66}{RESET}")
+        print(f"{BOLD}  OTHER OPTIONS:{RESET}")
+        print(f"  {YELLOW}[c]{RESET}  Custom PR number (nhập thủ công)")
+        print(f"  {YELLOW}[m]{RESET}  Review NHIỀU PR cùng lúc (vd: 1 3 5)")
+        print(f"  {YELLOW}[w]{RESET}  Webhook + Cloudflare Tunnel {DIM}(tức thì từ GitHub){RESET}")
+        print(f"  {YELLOW}[p]{RESET}  Polling Daemon {DIM}(tự động quét ngầm){RESET}")
+        print(f"  {YELLOW}[r]{RESET}  Refresh danh sách PR")
+        print(f"  {YELLOW}[q]{RESET}  Thoát")
         print(f"{BLUE}======================================================================{RESET}")
+        print(f"  {DIM}Tip: Nhập nhiều số cách nhau bằng dấu cách để review cùng lúc (vd: 1 4 7){RESET}")
 
-        choice = input(f"\n👉 {BOLD}Nhập lựa chọn của bạn:{RESET} ").strip().lower()
+        raw = input(f"\n{BOLD}  >>> {RESET}").strip().lower()
 
-        if choice == "q":
-            print(f"\n{GREEN}Tạm biệt anh Hiếu! Chúc anh một ngày làm việc hiệu quả.{RESET}\n")
+        if raw == "q":
+            print(f"\n{GREEN}Tạm biệt! Review well!{RESET}\n")
             sys.exit(0)
 
-        elif choice == "r" or choice == "":
+        elif raw in ("r", ""):
             continue
 
-        elif choice == "w":
-            from tunnel_manager import CloudflareTunnel
-            from webhook_server import start_webhook_server
-            port = config.get("webhook", {}).get("port", 8765)
-            tunnel = CloudflareTunnel(port=port)
-            tunnel.start()
-            try:
-                start_webhook_server(port=port, engine=engine, commands=config.get("supported_commands", []))
-            except KeyboardInterrupt:
-                tunnel.stop()
-                print("\n⏹️ Đã dừng Webhook.")
-                input("\nBấm Enter để quay lại menu...")
+        elif raw == "w":
+            _run_webhook_mode(engine, config)
 
-        elif choice == "p":
-            from polling_daemon import PollingDaemon
-            interval = config.get("poll_interval_seconds", 60)
-            daemon = PollingDaemon(repos=repos, engine=engine, state_manager=state_manager, interval=interval)
-            try:
-                daemon.start()
-            except KeyboardInterrupt:
-                print("\n⏹️ Đã dừng Polling Daemon.")
-                input("\nBấm Enter để quay lại menu...")
+        elif raw == "p":
+            _run_polling_mode(engine, state_manager, config, repos, current_user)
 
-        elif choice == "c":
-            print(f"\n{BOLD}📝 Nhập thông tin PR:{RESET}")
-            pr_input = input("  Nhập số PR (vd: 916): ").strip()
-            if not pr_input.isdigit():
-                print(f"{RED}Số PR không hợp lệ!{RESET}")
-                input("Bấm Enter để tiếp tục...")
-                continue
-            
-            repo_type = input("  Chọn repo (be / fe, mặc định: be): ").strip().lower()
-            if repo_type in repos_map:
-                target_repo = f"{org}/{repos_map[repo_type]}"
-            elif "/" in repo_type:
-                target_repo = repo_type
-            else:
-                target_repo = f"{org}/{repos_map.get('be', 'clickessms_be')}"
+        elif raw == "c":
+            _run_custom_pr(engine, org, repos_map)
 
-            selected_pr = {
-                "repo": target_repo,
-                "number": int(pr_input),
-                "title": f"PR #{pr_input}",
-                "author": "manual"
-            }
-            _handle_pr_actions(engine, selected_pr)
-
-        elif choice.isdigit():
-            idx = int(choice)
-            matched = next((p for p in pr_options if p["index"] == idx), None)
-            if not matched:
-                print(f"{RED}Lựa chọn không hợp lệ!{RESET}")
-                input("Bấm Enter để tiếp tục...")
-                continue
-            _handle_pr_actions(engine, matched)
+        elif raw == "m":
+            _run_multi_pr(engine, pr_options)
 
         else:
-            print(f"{RED}Lựa chọn không hợp lệ!{RESET}")
-            input("Bấm Enter để tiếp tục...")
+            # Parse space-separated numbers for multi-select or single digit
+            tokens = raw.split()
+            if all(t.isdigit() for t in tokens) and tokens:
+                indices = [int(t) for t in tokens]
+                matched = [p for p in pr_options if p["index"] in indices]
+                unknown = [i for i in indices if i not in [p["index"] for p in pr_options]]
+                if unknown:
+                    print(f"  {RED}Số không hợp lệ: {unknown} — chỉ nhập từ danh sách trên.{RESET}")
+                    input("  Bấm Enter để tiếp tục...")
+                    continue
+                if len(matched) == 1:
+                    _handle_pr_actions(engine, matched[0])
+                elif len(matched) > 1:
+                    _run_multi_pr_list(engine, matched)
+            else:
+                print(f"  {RED}Ký tự không hợp lệ — nhập số từ danh sách, hoặc c/m/w/p/r/q.{RESET}")
+                input("  Bấm Enter để tiếp tục...")
+
+
+def _run_multi_pr(engine, pr_options: List[Dict[str, Any]]):
+    """Prompt for multi-PR selection."""
+    clear_screen()
+    print(f"{BLUE}{'='*70}{RESET}")
+    print(f"{BOLD}  REVIEW NHIEU PR CUNG LUC{RESET}")
+    print(f"{BLUE}{'='*70}{RESET}")
+    for p in pr_options:
+        print(f"  {YELLOW}[{p['index']:>2}]{RESET}  #{p['number']}  {DIM}{p['repo'].split('/')[-1]}{RESET}  {p['title'][:55]}")
+
+    while True:
+        raw = input(f"\n  {BOLD}Nhập số PR (cách nhau bằng dấu cách, vd: 1 3 5):{RESET} ").strip()
+        if not raw:
+            return
+        tokens = raw.split()
+        if not all(t.isdigit() for t in tokens):
+            print(f"  {RED}Chỉ nhập số, thử lại:{RESET}")
+            continue
+        indices = [int(t) for t in tokens]
+        matched = [p for p in pr_options if p["index"] in indices]
+        unknown = set(indices) - {p["index"] for p in pr_options}
+        if unknown:
+            print(f"  {RED}Số không tồn tại trong danh sách: {sorted(unknown)} — thử lại:{RESET}")
+            continue
+        break
+
+    _run_multi_pr_list(engine, matched)
+
+
+def _run_multi_pr_list(engine, prs: List[Dict[str, Any]]):
+    """Review a list of PRs sequentially."""
+    clear_screen()
+    print(f"{BLUE}{'='*70}{RESET}")
+    print(f"{BOLD}  CHAY REVIEW {len(prs)} PR CUNG LUC{RESET}")
+    print(f"{BLUE}{'='*70}{RESET}")
+    for p in prs:
+        print(f"  - {p['repo'].split('/')[-1]} #{p['number']}: {p['title'][:60]}")
+
+    confirm = input(f"\n  {BOLD}Xác nhận review {len(prs)} PR trên? (y/N):{RESET} ").strip().lower()
+    if confirm != "y":
+        print(f"  {YELLOW}Đã huỷ.{RESET}")
+        input("  Bấm Enter để quay lại...")
+        return
+
+    results = []
+    for p in prs:
+        print(f"\n{CYAN}{'─'*70}{RESET}")
+        print(f"{BOLD}[{prs.index(p)+1}/{len(prs)}] Đang review {p['repo'].split('/')[-1]} PR #{p['number']}...{RESET}")
+        try:
+            engine.execute_review(p["repo"], p["number"])
+            results.append({"pr": p, "status": "OK"})
+            print(f"{GREEN}  ✅ Xong PR #{p['number']}{RESET}")
+        except Exception as e:
+            results.append({"pr": p, "status": f"ERROR: {e}"})
+            print(f"{RED}  ❌ Lỗi PR #{p['number']}: {e}{RESET}")
+
+    print(f"\n{BLUE}{'='*70}{RESET}")
+    print(f"{BOLD}  KET QUA:{RESET}")
+    for r in results:
+        status_icon = GREEN + "✅" + RESET if "OK" in r["status"] else RED + "❌" + RESET
+        print(f"  {status_icon}  #{r['pr']['number']} {r['pr']['repo'].split('/')[-1]} — {r['status']}")
+    print(f"{BLUE}{'='*70}{RESET}")
+    input("\n  Bấm Enter để quay lại menu chính...")
+
+
+def _run_custom_pr(engine, org: str, repos_map: Dict[str, str]):
+    """Let user type a PR number manually."""
+    print(f"\n{BOLD}  Nhap thong tin PR:{RESET}")
+    while True:
+        pr_input = input("    So PR (vi du: 916): ").strip()
+        if pr_input.isdigit():
+            break
+        print(f"    {RED}Chi nhap so nguyen duong, thu lai:{RESET}")
+
+    while True:
+        repo_input = input("    Repo (be / fe, mac dinh be): ").strip().lower()
+        if not repo_input:
+            repo_input = "be"
+        if repo_input in repos_map:
+            target_repo = f"{org}/{repos_map[repo_input]}"
+            break
+        elif "/" in repo_input:
+            target_repo = repo_input
+            break
+        else:
+            print(f"    {RED}Chi nhap 'be', 'fe' hoac 'org/repo', thu lai:{RESET}")
+
+    _handle_pr_actions(engine, {
+        "repo": target_repo,
+        "number": int(pr_input),
+        "title": f"PR #{pr_input}",
+        "author": "manual"
+    })
+
+
+def _run_webhook_mode(engine, config):
+    from tunnel_manager import CloudflareTunnel
+    from webhook_server import start_webhook_server
+    port = config.get("webhook", {}).get("port", 8765)
+    tunnel = CloudflareTunnel(port=port)
+    tunnel.start()
+    try:
+        start_webhook_server(port=port, engine=engine, commands=config.get("supported_commands", []))
+    except KeyboardInterrupt:
+        tunnel.stop()
+        print("\n  Webhook stopped.")
+        input("  Bam Enter de quay lai menu...")
+
+
+def _run_polling_mode(engine, state_manager, config, repos, current_user):
+    from polling_daemon import PollingDaemon
+
+    clear_screen()
+    print(f"{BLUE}{'='*70}{RESET}")
+    print(f"{BOLD}  POLLING DAEMON — CHON CHE DO QUET{RESET}")
+    print(f"{BLUE}{'='*70}{RESET}")
+    print(f"  {YELLOW}[1]{RESET}  Quet TOAN BO PR dang mo (all open PRs)")
+    if current_user:
+        print(f"  {YELLOW}[2]{RESET}  Chi quet PR duoc assign cho ban ({GREEN}{current_user}{RESET})")
+    print(f"  {YELLOW}[b]{RESET}  Quay lai\n")
+
+    while True:
+        sub = input(f"  {BOLD}Lua chon:{RESET} ").strip().lower()
+        if sub == "b":
+            return
+        if sub == "1":
+            assigned_filter = None
+            break
+        if sub == "2" and current_user:
+            assigned_filter = current_user
+            break
+        print(f"  {RED}Khong hop le, thu lai:{RESET}")
+
+    interval = config.get("poll_interval_seconds", 60)
+    daemon = PollingDaemon(
+        repos=repos,
+        engine=engine,
+        state_manager=state_manager,
+        interval=interval,
+        assigned_filter=assigned_filter
+    )
+    mode_label = f"assigned to @{assigned_filter}" if assigned_filter else "all open PRs"
+    print(f"\n  {GREEN}Starting Polling Daemon — {mode_label} — every {interval}s{RESET}")
+    print(f"  {DIM}Ctrl+C to stop{RESET}\n")
+    try:
+        daemon.start()
+    except KeyboardInterrupt:
+        print("\n  Polling stopped.")
+        input("  Bam Enter de quay lai menu...")
+
 
 def _handle_pr_actions(engine, pr_info: Dict[str, Any]):
     repo = pr_info["repo"]
@@ -165,52 +318,44 @@ def _handle_pr_actions(engine, pr_info: Dict[str, Any]):
     while True:
         clear_screen()
         repo_short = repo.split("/")[-1]
-        print(f"{BLUE}======================================================================{RESET}")
-        print(f"{GREEN}{BOLD}    🎯 ĐANG CHỌN: [{repo_short.upper()} #{number}]{RESET}")
-        print(f"    Tiêu đề: {CYAN}{title}{RESET}")
-        print(f"{BLUE}======================================================================{RESET}")
-        print(f"\n{BOLD}Chọn thao tác thực hiện:{RESET}")
-        print(f"  {YELLOW}[1]{RESET} 🚀 {BOLD}Review toàn diện{RESET} (Google Standards + Overview Dashboard + In-line Suggestions) {GREEN}[Mặc định]{RESET}")
-        print(f"  {YELLOW}[2]{RESET} 🔄 {BOLD}Re-review{RESET} (Kiểm tra commit mới nhất kể từ lần review trước)")
-        print(f"  {YELLOW}[3]{RESET} 🌐 {BOLD}Mở PR trên trình duyệt{RESET} (GitHub Web)")
-        print(f"  {YELLOW}[b]{RESET} ⬅️  Quay lại danh sách PR")
-        print(f"{BLUE}======================================================================{RESET}")
+        print(f"{BLUE}{'='*70}{RESET}")
+        print(f"{GREEN}{BOLD}    [{repo_short.upper()} #{number}]{RESET}  {CYAN}{title}{RESET}")
+        print(f"{BLUE}{'='*70}{RESET}")
+        print(f"\n  {YELLOW}[1]{RESET}  Review toan dien {DIM}(Google Standards + Dashboard + In-line){RESET}  {GREEN}[mac dinh]{RESET}")
+        print(f"  {YELLOW}[2]{RESET}  Re-review {DIM}(chi so sanh commit moi nhat vs lan review truoc){RESET}")
+        print(f"  {YELLOW}[3]{RESET}  Mo PR tren trinh duyet (GitHub Web)")
+        print(f"  {YELLOW}[b]{RESET}  Quay lai danh sach PR")
+        print(f"{BLUE}{'='*70}{RESET}")
 
-        sub_choice = input(f"\n👉 {BOLD}Nhập lựa chọn [1-3 / b] (Mặc định: 1):{RESET} ").strip().lower()
-        if sub_choice == "" or sub_choice == "1":
-            print(f"\n{GREEN}🚀 Đang tiến hành review {repo} PR #{number}...{RESET}\n")
-            try:
-                res = engine.execute_review(repo, number)
-                print(f"\n{GREEN}✅ Hoàn thành review! Đã gửi đánh giá và gợi ý code lên GitHub.{RESET}\n")
-            except Exception as e:
-                print(f"\n{RED}❌ Có lỗi xảy ra trong quá trình review: {e}{RESET}\n")
+        while True:
+            sub = input(f"\n  {BOLD}>>> {RESET}").strip().lower()
+            if sub in ("", "1", "2", "3", "b"):
+                break
+            print(f"  {RED}Chi nhap 1/2/3/b, thu lai:{RESET}")
 
-            ask_web = input("🌐 Bạn có muốn mở PR trên trình duyệt để xem kết quả? (y/N): ").strip().lower()
-            if ask_web == "y":
-                open_pr_in_browser(repo, number)
-
-            input("\nBấm Enter để quay lại menu chính...")
+        if sub == "b":
             break
 
-        elif sub_choice == "2":
-            print(f"\n{GREEN}🔄 Đang kiểm tra thay đổi commit mới cho {repo} PR #{number}...{RESET}\n")
+        if sub in ("", "1", "2"):
+            action_label = "Re-review" if sub == "2" else "Review toan dien"
+            print(f"\n  {GREEN}{action_label} {repo_short} PR #{number}...{RESET}\n")
             try:
-                res = engine.execute_review(repo, number)
-                print(f"\n{GREEN}✅ Hoàn tất Re-review!{RESET}\n")
+                engine.execute_review(repo, number)
+                print(f"\n  {GREEN}✅ Hoan thanh! Ket qua da duoc gui len GitHub.{RESET}\n")
             except Exception as e:
-                print(f"\n{RED}❌ Có lỗi xảy ra: {e}{RESET}\n")
+                print(f"\n  {RED}❌ Loi: {e}{RESET}\n")
 
-            ask_web = input("🌐 Bạn có muốn mở PR trên trình duyệt? (y/N): ").strip().lower()
+            while True:
+                ask_web = input("  Mo PR tren trinh duyet de xem ket qua? (y/N): ").strip().lower()
+                if ask_web in ("y", "n", ""):
+                    break
+                print(f"  {RED}Chi nhap y hoac N:{RESET}")
             if ask_web == "y":
                 open_pr_in_browser(repo, number)
-
-            input("\nBấm Enter để quay lại menu chính...")
+            input("\n  Bam Enter de quay lai menu chinh...")
             break
 
-        elif sub_choice == "3":
-            print(f"\n{BLUE}Đang mở PR #{number} trên trình duyệt...{RESET}")
+        elif sub == "3":
+            print(f"\n  {BLUE}Dang mo PR #{number} tren trinh duyet...{RESET}")
             open_pr_in_browser(repo, number)
-            input("\nBấm Enter để tiếp tục...")
-
-        elif sub_choice == "b":
-            break
+            input("  Bam Enter de tiep tuc...")
