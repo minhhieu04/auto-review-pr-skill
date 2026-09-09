@@ -6,7 +6,7 @@ import time
 from typing import Optional
 
 class CloudflareTunnel:
-    def __init__(self, port: int = 8080):
+    def __init__(self, port: int = 8765):
         self.port = port
         self.process: Optional[subprocess.Popen] = None
         self.public_url: Optional[str] = None

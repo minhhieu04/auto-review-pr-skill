@@ -30,7 +30,7 @@ def load_config():
         "org": "deveop-com",
         "monitored_repos": ["deveop-com/clickessms_be", "deveop-com/clickessms_fe"],
         "poll_interval_seconds": 60,
-        "webhook": {"port": 8080},
+        "webhook": {"port": 8765},
         "supported_commands": ["/review", "/improve", "/describe", "/ask"]
     }
 
