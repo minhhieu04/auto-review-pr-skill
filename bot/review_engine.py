@@ -55,7 +55,7 @@ class ReviewEngine:
         return "🛠️ Maintenance"
 
     def analyze_diff(self, diff: str) -> Dict[str, Any]:
-        """Perform heuristic & rule-based scan for common bugs, N+1, security, and styling."""
+        """Universal, stack-aware heuristic scan for bugs, N+1, security, and styling."""
         findings = []
         files = []
         current_file = ""
@@ -68,76 +68,213 @@ class ReviewEngine:
                     current_file = parts[2].replace("a/", "")
                     files.append(current_file)
             elif line.startswith("@@"):
-                # Parse chunk header @@ -x,y +start,len @@
                 m = re.search(r"\+(\d+)", line)
                 if m:
                     current_line = int(m.group(1))
             elif line.startswith("+") and not line.startswith("+++"):
-                added_code = line[1:]
-                
-                # Check for N+1 queries in Django loops / resolvers
-                if re.search(r"\.(all\(\)|filter\(|get\()\b", added_code) and any(kw in current_file for kw in ["schema.py", "views.py"]):
-                    if "select_related" not in added_code and "prefetch_related" not in added_code:
+                added = line[1:]
+                file_lower = current_file.lower()
+                is_test_file = any(kw in file_lower for kw in [".test.", ".spec.", "/test_", "/tests/", "_test.py"])
+
+                # -------------------------------------------------------------
+                # 1. UNIVERSAL SECURITY & SECRETS (All languages)
+                # -------------------------------------------------------------
+                # Hardcoded API Keys / Tokens
+                if re.search(r"(api_key|token|password|secret|auth_token|private_key)\s*[:=]\s*['\"][A-Za-z0-9_\-]{10,}['\"]", added, re.IGNORECASE):
+                    if not any(safe in added.lower() for safe in ["dummy", "mock", "example", "placeholder"]):
                         findings.append({
                             "file": current_file,
                             "line": current_line,
                             "severity": "🔴 Critical",
                             "level": "critical",
-                            "title": "Potential N+1 Query in Resolver / Loop",
-                            "why": "Querying related models without select_related or prefetch_related causes repeated database hits for each item in GraphQL collections.",
-                            "fix": added_code.strip() + " # Ensure .select_related() or prefetch cache is utilized"
+                            "title": "Possible Hardcoded Secret or API Key",
+                            "why": "Committing credentials exposes secrets to git history. Use environment variables instead.",
+                            "fix": "os.environ.get('SECRET_KEY') // or process.env.SECRET_KEY"
                         })
 
-                # Check for NoneType crash risks
-                if re.search(r"def \w+\(self, info, (\w+)", added_code):
-                    m_param = re.search(r"def \w+\(self, info, (\w+)", added_code)
-                    param = m_param.group(1) if m_param else "param"
-                    if param not in ["root", "args", "kwargs"]:
+                # AWS Access Key Pattern
+                if re.search(r"\bAKIA[0-9A-Z]{16}\b", added):
+                    findings.append({
+                        "file": current_file,
+                        "line": current_line,
+                        "severity": "🔴 Critical",
+                        "level": "critical",
+                        "title": "AWS Access Key Exposed",
+                        "why": "Plaintext AWS Access Key detected. Revoke and rotate immediately.",
+                        "fix": "Use AWS IAM roles or secrets manager"
+                    })
+
+                # Private Key Blocks
+                if "BEGIN RSA PRIVATE KEY" in added or "BEGIN OPENSSH PRIVATE KEY" in added or "BEGIN PRIVATE KEY" in added:
+                    findings.append({
+                        "file": current_file,
+                        "line": current_line,
+                        "severity": "🔴 Critical",
+                        "level": "critical",
+                        "title": "Private Key Exposed",
+                        "why": "Cryptographic private key committed in source code.",
+                        "fix": "Load private keys from secure file or key vault"
+                    })
+
+                # Disabled SSL verification
+                if re.search(r"\bverify\s*=\s*False\b", added) or re.search(r"rejectUnauthorized:\s*false", added):
+                    findings.append({
+                        "file": current_file,
+                        "line": current_line,
+                        "severity": "🔴 Critical",
+                        "level": "critical",
+                        "title": "Disabled TLS/SSL Verification",
+                        "why": "Disabling TLS certificate verification enables Man-in-the-Middle (MitM) attacks.",
+                        "fix": "Enable proper CA bundle verification"
+                    })
+
+                # -------------------------------------------------------------
+                # 2. PYTHON / BACKEND RULES (.py)
+                # -------------------------------------------------------------
+                if current_file.endswith(".py"):
+                    # SQL Injection via string formatting
+                    if re.search(r"\.(execute|raw)\(f['\"]", added) or re.search(r"\.(execute|raw)\(.*%\s*\(", added):
+                        findings.append({
+                            "file": current_file,
+                            "line": current_line,
+                            "severity": "🔴 Critical",
+                            "level": "critical",
+                            "title": "SQL Injection Risk via String Formatting",
+                            "why": "Constructing SQL queries with string interpolation or f-strings bypasses parameter sanitization.",
+                            "fix": "cursor.execute('SELECT ... WHERE id = %s', [param])"
+                        })
+
+                    # N+1 Queries (ORM calls in loops or resolvers)
+                    if re.search(r"\.(all\(\)|filter\(|get\()\b", added):
+                        if any(kw in file_lower for kw in ["schema.py", "views.py", "serializers", "services", "resolvers"]):
+                            if "select_related" not in added and "prefetch_related" not in added:
+                                findings.append({
+                                    "file": current_file,
+                                    "line": current_line,
+                                    "severity": "🔴 Critical",
+                                    "level": "critical",
+                                    "title": "Potential N+1 Query in ORM Traversal",
+                                    "why": "Accessing related models in queries without select_related() or prefetch_related() causes N additional DB roundtrips.",
+                                    "fix": added.strip() + " # Use .select_related() or .prefetch_related()"
+                                })
+
+                    # Swallowed Exceptions
+                    if re.search(r"except(\s+Exception)?:\s*pass\b", added.strip()):
                         findings.append({
                             "file": current_file,
                             "line": current_line,
                             "severity": "🟡 Major",
                             "level": "major",
-                            "title": f"Missing Null Guard for '{param}'",
-                            "why": "If client provides null/undefined for this argument, downstream attribute access will raise AttributeError.",
-                            "fix": f"if not {param}:\n    return None"
+                            "title": "Silently Swallowed Exception",
+                            "why": "Broad except with 'pass' hides critical errors and makes debugging unpredictable.",
+                            "fix": "except SpecificException as e:\n    logger.warning(f'Handled error: {e}')"
                         })
 
-                # Check for sticky + overflow CSS conflict in JSX
-                if "sticky" in added_code and "overflow" in added_code:
-                    findings.append({
-                        "file": current_file,
-                        "line": current_line,
-                        "severity": "🔴 Critical",
-                        "level": "critical",
-                        "title": "Sticky Header Broken by Overflow Context",
-                        "why": "CSS sticky positioning fails when an ancestor container has overflow: hidden/auto/scroll, breaking table header visibility.",
-                        "fix": "// Isolate overflow context or attach sticky styles to direct viewport scroll container"
-                    })
+                    # Mutable Default Argument
+                    if re.search(r"def \w+\([^)]*=\s*(\[\]|\{\})", added):
+                        findings.append({
+                            "file": current_file,
+                            "line": current_line,
+                            "severity": "🟡 Major",
+                            "level": "major",
+                            "title": "Mutable Default Argument in Function Definition",
+                            "why": "Default mutable arguments ([] or {}) are shared across all calls, causing unexpected state retention.",
+                            "fix": "def func(param=None):\n    if param is None:\n        param = []"
+                        })
 
-                # Check for hardcoded credentials / tokens
-                if re.search(r"(api_key|token|password|secret)\s*=\s*['\"][A-Za-z0-9_\-]{8,}['\"]", added_code, re.IGNORECASE):
-                    findings.append({
-                        "file": current_file,
-                        "line": current_line,
-                        "severity": "🔴 Critical",
-                        "level": "critical",
-                        "title": "Possible Hardcoded Secret",
-                        "why": "Committing credentials violates security best practices and exposes secrets to git history.",
-                        "fix": "os.environ.get('SECRET_KEY')"
-                    })
+                    # Missing null guard in resolver/view
+                    if re.search(r"def resolve_\w+\(self, info, (\w+)", added):
+                        m_param = re.search(r"def resolve_\w+\(self, info, (\w+)", added)
+                        param = m_param.group(1) if m_param else "param"
+                        if param not in ["root", "args", "kwargs"]:
+                            findings.append({
+                                "file": current_file,
+                                "line": current_line,
+                                "severity": "🟡 Major",
+                                "level": "major",
+                                "title": f"Missing Null Guard for Resolver Param '{param}'",
+                                "why": f"If client sends null/None for '{param}', subsequent attribute accesses will raise AttributeError.",
+                                "fix": f"if not {param}:\n    return None"
+                            })
 
-                # Check for console.log / debugger
-                if re.search(r"\bconsole\.(log|debug)\b", added_code) and not current_file.endswith(".test.js"):
-                    findings.append({
-                        "file": current_file,
-                        "line": current_line,
-                        "severity": "Nit:",
-                        "level": "nit",
-                        "title": "Leftover console.log",
-                        "why": "Per Google Style Guidelines, development logging statements should be removed before merge.",
-                        "fix": "// Remove console.log"
-                    })
+                # -------------------------------------------------------------
+                # 3. JAVASCRIPT / TYPESCRIPT / FRONTEND (.js, .ts, .jsx, .tsx)
+                # -------------------------------------------------------------
+                if any(current_file.endswith(ext) for ext in [".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte"]):
+                    # Debugger statement
+                    if re.search(r"\bdebugger\b;", added):
+                        findings.append({
+                            "file": current_file,
+                            "line": current_line,
+                            "severity": "🔴 Critical",
+                            "level": "critical",
+                            "title": "Debugger Statement in Production Code",
+                            "why": "debugger; will halt execution in browser devtools in production.",
+                            "fix": "// Remove debugger;"
+                        })
+
+                    # CSS sticky + overflow collision
+                    if "sticky" in added and "overflow" in added:
+                        findings.append({
+                            "file": current_file,
+                            "line": current_line,
+                            "severity": "🔴 Critical",
+                            "level": "critical",
+                            "title": "CSS Sticky Broken by Overflow Context",
+                            "why": "position: sticky stops working when an ancestor or current element has overflow: hidden/auto/scroll.",
+                            "fix": "// Move overflow to scroll container, keep sticky header outside"
+                        })
+
+                    # console.log leftover (non-test files)
+                    if re.search(r"\bconsole\.(log|debug)\b", added) and not is_test_file:
+                        findings.append({
+                            "file": current_file,
+                            "line": current_line,
+                            "severity": "Nit:",
+                            "level": "nit",
+                            "title": "Leftover console.log",
+                            "why": "Per Google Style Guidelines, development logging statements should be removed before merge.",
+                            "fix": "// Remove console.log"
+                        })
+
+                    # Array index as React key
+                    if re.search(r"key=\{index\}|key=\{i\}|key=\{idx\}", added):
+                        findings.append({
+                            "file": current_file,
+                            "line": current_line,
+                            "severity": "🟢 Minor",
+                            "level": "minor",
+                            "title": "Array Index Used as React Key",
+                            "why": "Using array indices as keys can cause rendering glitches and state loss when items are re-ordered or filtered.",
+                            "fix": "key={item.id}"
+                        })
+
+                    # TypeScript any type abuse
+                    if current_file.endswith((".ts", ".tsx")) and re.search(r":\s*any\b", added) and not is_test_file:
+                        findings.append({
+                            "file": current_file,
+                            "line": current_line,
+                            "severity": "🟢 Minor",
+                            "level": "minor",
+                            "title": "TypeScript 'any' Type Usage",
+                            "why": "Using 'any' disables compiler type safety. Use 'unknown' or a specific interface/type.",
+                            "fix": "unknown"
+                        })
+
+                # -------------------------------------------------------------
+                # 4. DEVOPS & DOCKER
+                # -------------------------------------------------------------
+                if "dockerfile" in file_lower:
+                    if re.search(r"^FROM\s+[a-zA-Z0-9_\-\./]+:latest\b", added, re.IGNORECASE):
+                        findings.append({
+                            "file": current_file,
+                            "line": current_line,
+                            "severity": "🟡 Major",
+                            "level": "major",
+                            "title": "Unpinned Docker Base Image (:latest)",
+                            "why": "Using :latest makes builds non-reproducible. Pin to a specific version or digest.",
+                            "fix": "FROM python:3.11-slim"
+                        })
 
                 current_line += 1
             elif not line.startswith("-"):
@@ -192,7 +329,7 @@ class ReviewEngine:
         if is_rereview and prev_sha:
             md.append(f"> 🔄 **Incremental Re-Review Note:** Comparing changes against previously reviewed commit `{prev_sha[:7]}`.\n")
 
-        # Critical / Major Findings
+        # Critical Issues
         if crit_count > 0:
             md.append("### 🔴 Critical Issues")
             for f in findings:
@@ -202,6 +339,7 @@ class ReviewEngine:
                     md.append(f"   ```suggestion\n   {f['fix']}\n   ```")
             md.append("")
 
+        # Major Issues
         if major_count > 0:
             md.append("### 🟡 Major Issues")
             for f in findings:
@@ -211,6 +349,17 @@ class ReviewEngine:
                     md.append(f"   ```suggestion\n   {f['fix']}\n   ```")
             md.append("")
 
+        # Minor Issues
+        if minor_count > 0:
+            md.append("### 🟢 Minor Issues")
+            for f in findings:
+                if f["level"] == "minor":
+                    md.append(f"1. **`{f['file']}:{f['line']}`** — {f['title']}")
+                    md.append(f"   > **Why:** {f['why']}")
+                    md.append(f"   ```suggestion\n   {f['fix']}\n   ```")
+            md.append("")
+
+        # Nit Issues
         if nit_count > 0:
             md.append("### 🧹 Nit (Style / Cleanliness)")
             for f in findings:
@@ -223,11 +372,11 @@ class ReviewEngine:
         md.append("| Aspect | Status | Notes |")
         md.append("|:-------|:------:|:------|")
         md.append(f"| Design | {'✅' if crit_count == 0 else '⚠️'} | {'Fits codebase architecture' if crit_count == 0 else 'Refinement required'} |")
-        md.append(f"| Functionality | {'✅' if crit_count == 0 else '❌'} | {'Meets expected behavior' if crit_count == 0 else 'Edge cases / null issues detected'} |")
+        md.append(f"| Functionality | {'✅' if crit_count == 0 else '❌'} | {'Meets expected behavior' if crit_count == 0 else 'Issues detected'} |")
         md.append(f"| Complexity | {'✅' if major_count == 0 else '⚠️'} | {'Clean and understandable' if major_count == 0 else 'Simplification suggested'} |")
-        md.append(f"| Security | {'✅' if not any('Secret' in f['title'] for f in findings) else '❌'} | Guard against injection and credentials leaks |")
+        md.append(f"| Security | {'✅' if not any('Secret' in f['title'] or 'Injection' in f['title'] for f in findings) else '❌'} | Guard against injection and credentials leaks |")
         md.append(f"| Tests | ℹ️ | Ensure unit/integration tests cover new branches |")
-        md.append(f"| Style & Naming | {'✅' if nit_count == 0 else '⚠️'} | Follows project conventions |")
+        md.append(f"| Style & Naming | {'✅' if nit_count == 0 else '⚠️'} | Follows conventions |")
         md.append("")
 
         md.append("### 📊 Decision: **" + verdict + "**")
@@ -245,7 +394,7 @@ class ReviewEngine:
         # 2. Post inline comments if any critical/major
         inline_comments = []
         for f in findings[:10]:
-            if f.get("level") in ["critical", "major"]:
+            if f.get("level") in ["critical", "major", "minor"]:
                 inline_comments.append({
                     "path": f["file"],
                     "line": f["line"],
@@ -264,7 +413,7 @@ class ReviewEngine:
                 "--input", "-"
             ], input=json.dumps(payload), text=True, capture_output=True)
             if res.returncode != 0:
-                print(f"Notice: In-line comment post fallback (possibly lines not in diff): {res.stderr}")
+                print(f"Notice: In-line comment post fallback: {res.stderr}")
 
     def execute_review(self, repo: str, pr_number: int) -> Dict[str, Any]:
         print(f"🔍 Starting review on {repo} PR #{pr_number}...")

@@ -1,23 +1,35 @@
 ---
 name: auto-review-pr
 description: >
-  Automated PR code review pipeline using multi-agent architecture.
-  Dispatches specialized subagents (Backend, Frontend, Edge-Case) in parallel
-  to review PRs with leader-level quality. Posts in-line GitHub Suggestion blocks.
-  Use PROACTIVELY when reviewing any PR in the clickessms monorepo (BE or FE).
+  Universal automated PR code review pipeline using multi-agent architecture.
+  Dispatches specialized subagents (Backend, Frontend, Resilience/QA) in parallel
+  to review PRs with Google Engineering Practices & leader-level quality.
+  Works across ANY GitHub repository and tech stack (Python, React, TS, Go, Java).
+  100% self-contained with bundled domain rules in rules/*.md.
   Trigger: user says "review pr", "review PR #123", or uses /review-pr command.
-version: 1.0.0
-languages: [python, javascript, typescript, jsx, tsx]
+version: 2.0.0
+languages: [python, javascript, typescript, jsx, tsx, go, java, sql, dockerfile]
 ---
 
-# Auto-Review PR — Skill Instructions
+# Universal Auto-Review PR — Skill Instructions
 
 ## Overview
 
-This skill automates the PR code review process for the `clickessms` monorepo
-(Django backend + React frontend). It dispatches multiple specialized subagents
-in parallel to provide comprehensive, leader-quality code reviews with in-line
+This skill automates the PR code review process for **any GitHub repository**.
+It combines **Google Engineering Practices** with **PR-Agent architecture** and
+Antigravity AI to deliver leader-level, constructive code reviews with in-line
 GitHub Suggestion blocks.
+
+> **💡 100% Self-Contained Knowledge Base:**
+> All domain checklists, anti-patterns, and best practices are bundled directly
+> inside the `rules/` directory of this skill:
+> - `rules/01_google_engineering_practices.md` — Core review philosophy & checklist
+> - `rules/02_backend_architecture.md` — Django, Node/Nest, Go, ORM, N+1, Migrations
+> - `rules/03_frontend_architecture.md` — React, Next.js, Hooks, TS, CSS layout, A11y
+> - `rules/04_security_and_defense.md` — Secrets, SQLi, OWASP, Defense-in-depth
+> - `rules/05_testing_and_resilience.md` — Mock anti-patterns, race conditions, timeouts
+>
+> This skill works seamlessly on ANY computer, with ZERO external skill dependencies!
 
 ## Review Philosophy — Google Engineering Practices
 
@@ -35,50 +47,40 @@ Every review MUST follow these principles from Google's code review guide:
   unmaintainable complexity).
 
 ### What to Look For (Google's Checklist)
-1. **Design** — Does the change fit the existing architecture? Does it belong here
-   or in a library? Is it over-engineered for speculative future needs?
-2. **Functionality** — Does it do what the developer intended? Think about edge
-   cases, concurrency problems, and user-facing impact.
-3. **Complexity** — Can it be understood quickly by other developers? "Too complex"
-   = developers will introduce bugs when modifying it later.
-4. **Tests** — Are tests correct, sensible, and useful? Do they test the right
-   thing (behavior, not implementation)? Will they fail when the code is broken?
-5. **Naming** — Do names communicate intent? Are they too long or too short?
-6. **Comments** — Are comments clear and necessary? Do they explain **why**, not
-   **what**? Could the code be simplified instead of commented?
-7. **Style** — Follow the project's existing style guide. Pure style changes should
-   not be mixed with functional changes.
-8. **Documentation** — Are related docs (README, API docs) updated if needed?
-9. **Every line** — Look at every line of code assigned to you. Don't just skim.
-10. **Context** — Look at the whole file, not just the changed lines. The change
-    might be correct in isolation but break the surrounding context.
+1. **Design** — Does the change fit the existing architecture? Is it over-engineered?
+2. **Functionality** — Does it do what the developer intended? Are edge cases handled?
+3. **Complexity** — Can it be understood quickly? Avoid clever, unreadable code.
+4. **Tests** — Are automated tests included? Do they test behavior, not mock details?
+5. **Naming** — Do names clearly communicate intent?
+6. **Comments** — Do comments explain **why**, not **what**?
+7. **Style** — Follow project conventions. Pure style changes should not mix with logic.
+8. **Documentation** — Are READMEs, OpenAPI specs, or docs updated?
+9. **Every line** — Look at every line assigned to you. Don't skim.
+10. **Context** — Look at surrounding code, not just isolated diff chunks.
 
 ### How to Write Review Comments (Google's Guide)
 - **Be kind** — Comment on the **code**, never the **developer**.
-- **Explain your reasoning** — Don't just say "this is wrong", explain **why**
-  and point to documentation or evidence.
-- **Balance direction vs autonomy** — Point out problems AND suggest fixes,
-  but let the developer choose the approach when multiple solutions exist.
-- **Encourage simplification** — Ask developers to simplify code rather than
-  just explaining complexity to you.
-- **Label optional comments** — Use `Nit:` prefix for minor style issues and
-  `Optional:` for suggestions that aren't required for approval.
+- **Explain your reasoning** — Always explain **why** and suggest a concrete alternative.
+- **Provide Actionable Suggestions** — Always include GitHub Suggestion blocks (` ```suggestion `).
+- **Label optional comments** — Use `Nit:` for minor style, `Suggestion:` for optional ideas.
 
 ## When to Use
 
 **Trigger conditions (ANY):**
 - User says: "review pr", "review PR #NNN", "check PR", "auto review"
-- User provides a PR number to review
+- User provides a PR number to review (optionally specifying repository)
 - User asks to review a branch or diff
 
 ## Execution Flow
 
-### Step 0: Determine Target PR
+### Step 0: Determine Target PR & Repository
 
-Ask or parse from user input:
-- **Repo**: `clickessms_be` or `clickessms_fe` (or both if user says "review all")
+Parse from user input or auto-detect:
+- **Repo**:
+  1. Explicitly mentioned (e.g. `facebook/react`, `deveop-com/clickessms_be`)
+  2. Shortcut key (e.g. `be` -> `clickessms_be`, `fe` -> `clickessms_fe`)
+  3. Auto-detected from current working directory: `git config --get remote.origin.url`
 - **PR Number**: The GitHub PR number
-- **Org**: `deveop-com` (default)
 
 ### Step 1: Gather PR Context
 

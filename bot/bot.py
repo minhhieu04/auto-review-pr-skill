@@ -34,14 +34,28 @@ def load_config():
         "supported_commands": ["/review", "/improve", "/describe", "/ask"]
     }
 
-def resolve_repo(repo_input: str, config: dict) -> str:
+def resolve_repo(repo_input: Optional[str], config: dict) -> str:
     org = config.get("org", "deveop-com")
     repos_map = config.get("repos", {})
-    if repo_input in repos_map:
-        return f"{org}/{repos_map[repo_input]}"
-    if "/" in repo_input:
+
+    if repo_input and "/" in repo_input:
         return repo_input
-    return f"{org}/{repo_input}"
+    if repo_input and repo_input in repos_map:
+        return f"{org}/{repos_map[repo_input]}"
+
+    # Auto-detect if inside a git directory
+    from interactive_menu import detect_current_repo
+    detected = detect_current_repo()
+    if detected:
+        return detected
+
+    if repo_input:
+        return f"{org}/{repo_input}"
+
+    monitored = config.get("monitored_repos", [])
+    if monitored:
+        return monitored[0]
+    return f"{org}/clickessms_be"
 
 def main():
     parser = argparse.ArgumentParser(description="Automated PR Code Review Bot")
