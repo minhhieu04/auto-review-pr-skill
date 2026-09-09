@@ -14,12 +14,12 @@ class LLMClient:
 
     def _default_model(self, provider: str) -> str:
         if provider == "gemini":
-            return "gemini-2.5-flash"
+            return "gemini-3.8-flash"
         elif provider == "deepseek":
-            return "deepseek-chat"
+            return "deepseek-reasoner"
         elif provider == "openai":
-            return "gpt-4o-mini"
-        return "gemini-2.5-flash"
+            return "gpt-4o"
+        return "gemini-3.8-flash"
 
     def is_configured(self) -> bool:
         return bool(self.api_key and self.provider in ["gemini", "deepseek", "openai"])

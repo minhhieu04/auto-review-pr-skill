@@ -240,7 +240,7 @@ def _manage_ai_settings(config: Dict[str, Any], engine):
     while True:
         clear_screen()
         provider = ai_conf.get("provider", "gemini").lower()
-        model = ai_conf.get("model", "") or ("gemini-2.5-flash" if provider == "gemini" else "deepseek-chat" if provider == "deepseek" else "gpt-4o-mini")
+        model = ai_conf.get("model", "") or ("gemini-3.8-flash" if provider == "gemini" else "deepseek-reasoner" if provider == "deepseek" else "gpt-4o")
         raw_key = ai_conf.get("api_key", "") or os.environ.get("GEMINI_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "") or os.environ.get("DEEPSEEK_API_KEY", "")
         masked_key = (raw_key[:6] + "..." + raw_key[-4:]) if len(raw_key) > 10 else ("Chưa có" if not raw_key else "******")
         status = f"{GREEN}BẬT (Active){RESET}" if raw_key else f"{YELLOW}TẮT (Đang dùng 4 Subagents Rule-based cục bộ){RESET}"
@@ -256,7 +256,7 @@ def _manage_ai_settings(config: Dict[str, Any], engine):
         print("  Các tùy chọn:")
         print(f"    {YELLOW}[1]{RESET}  Đổi Provider (1: Google Gemini | 2: DeepSeek | 3: OpenAI)")
         print(f"    {YELLOW}[2]{RESET}  Nhập / Đổi API Key")
-        print(f"    {YELLOW}[3]{RESET}  Đổi tên Model (ví dụ: gemini-2.5-flash, deepseek-chat, gpt-4o)")
+        print(f"    {YELLOW}[3]{RESET}  Đổi tên Model (ví dụ: gemini-3.8-flash, gemini-3.8-pro, deepseek-reasoner, gpt-4o)")
         print(f"    {YELLOW}[4]{RESET}  ⚡ Test kết nối AI (gửi ping test)")
         print(f"    {YELLOW}[5]{RESET}  Xóa API Key (quay về chế độ Local Subagents)")
         print(f"    {YELLOW}[b]{RESET}  Lưu & Quay lại menu chính\n")
@@ -277,19 +277,19 @@ def _manage_ai_settings(config: Dict[str, Any], engine):
 
         elif sub == "1":
             print("\n  Chọn Provider:")
-            print("    [1] Google Gemini (Mặc định: gemini-2.5-flash)")
-            print("    [2] DeepSeek (Mặc định: deepseek-chat)")
-            print("    [3] OpenAI / ChatGPT (Mặc định: gpt-4o-mini)")
+            print("    [1] Google Gemini (Mặc định: gemini-3.8-flash)")
+            print("    [2] DeepSeek (Mặc định: deepseek-reasoner / deepseek-chat)")
+            print("    [3] OpenAI / ChatGPT (Mặc định: gpt-4o / o3-mini)")
             p_choice = input("  Chọn [1-3]: ").strip()
             if p_choice == "1":
                 ai_conf["provider"] = "gemini"
-                ai_conf["model"] = "gemini-2.5-flash"
+                ai_conf["model"] = "gemini-3.8-flash"
             elif p_choice == "2":
                 ai_conf["provider"] = "deepseek"
-                ai_conf["model"] = "deepseek-chat"
+                ai_conf["model"] = "deepseek-reasoner"
             elif p_choice == "3":
                 ai_conf["provider"] = "openai"
-                ai_conf["model"] = "gpt-4o-mini"
+                ai_conf["model"] = "gpt-4o"
 
         elif sub == "2":
             key_input = input(f"\n  Dán {provider.upper()} API Key của bạn: ").strip()
