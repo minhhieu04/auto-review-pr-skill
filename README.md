@@ -7,24 +7,34 @@
 
 ## 🌟 Tính Năng Đột Phá — Độc Lập & Scale Toàn Diện
 
-1. **Kiến Trúc Multi-Subagents Song Song (Parallel Specialized Agents)**:
-   - Thay vì 1 reviewer chung chung, hệ thống điều phối **4 Subagents chuyên môn hóa chạy song song**:
+1. **Chế Độ Review Kép Thông Minh (Dual-Mode: AI LLM + Local Subagents)**:
+   - **Chế độ AI Siêu Tốc (AI Mode)**: Tích hợp trực tiếp Google Gemini (`gemini-3.8-flash`, `gemini-3.6-flash`), DeepSeek (`deepseek-reasoner`), hoặc OpenAI (`gpt-5`). Đọc toàn bộ 5 gói rules và git diff, phân tích toàn diện trong vài giây.
+   - **Tự Động Fallback Không Treo**: Nếu quota API cạn hoặc server bận (429/503), bot tự động chuyển model dự phòng hoặc rơi về **Local Subagents** an toàn tuyệt đối mà không bị gián đoạn.
+   - **Bảo Mật & Lưu Trữ API Key Tự Động**: Key được lưu trong file `bot/.env` (được `.gitignore` bảo vệ), tự động load lại khi mở bot, che giấu ký tự trên giao diện (`AQ.Ab8...C0dg`).
+
+2. **Inline Code Suggestions 1-Click Trực Tiếp Trên GitHub**:
+   - Không chỉ nhận xét chung chung, hệ thống **ghim thẳng comment vào từng dòng code bị lỗi** trên tab *Files changed* của PR.
+   - Kèm khối mã đề xuất chuẩn GitHub (````suggestion ... ````) — lập trình viên chỉ cần bấm nút **"Commit suggestion"** (1 click) trực tiếp trên GitHub để sửa code ngay!
+   - Tự động map và căn chỉnh số dòng (Diff Alignment) với các dòng thay đổi thực tế trong PR để đảm bảo không bị lỗi diff.
+
+3. **Kiến Trúc Multi-Subagents Song Song (Parallel Specialized Agents)**:
+   - Khi không dùng API Key, hệ thống tự kích hoạt **4 Subagents chuyên môn hóa chạy song song**:
      - ⚙️ **Backend Reviewer Subagent**: ORM, N+1 queries, SQL Injection, API boundaries, migrations.
      - 🎨 **Frontend Performance Subagent**: React hooks, re-renders, layout CSS sticky/overflow, TypeScript, A11y.
      - 🛡️ **Security Auditor Subagent**: Rà soát secrets, API keys, AWS keys, Private keys, TLS/SSL verify.
      - 🧪 **Resilience & QA Subagent**: Anti-patterns trong test, sleep delays, Docker unpinned tags, edge-cases.
    - Các subagents chạy đồng thời và gắn thẻ `[Agent Name]` vào từng issue tìm thấy trên GitHub!
 
-2. **Quản Lý Nhiều Tài Khoản Git (Multi-Account Switcher & Repo Browser)**:
+4. **Quản Lý Nhiều Tài Khoản Git (Multi-Account Switcher & Repo Browser)**:
    - Tự động nhận diện nếu máy có **nhiều tài khoản GitHub** (cá nhân, công ty...).
    - **`[u] Chuyển Git User`**: Chuyển tài khoản active tức thì qua `gh auth switch`.
    - **`[s] Chọn từ Repos của tôi`**: Tự động tải danh sách toàn bộ repos của user đó để chọn review ngay với 1 phím bấm!
 
-3. **100% Độc Lập (Self-Contained Knowledge Base)**:
+5. **100% Độc Lập (Self-Contained Knowledge Base)**:
    - Toàn bộ tri thức review (5 gói `rules/`) được nhúng trực tiếp trong repo.
    - Người khác clone về máy là dùng được ngay, **không cần cài thêm bất kỳ skill ngoài nào**.
 
-4. **Dùng Cho Mọi Dự Án (Project-Agnostic & Auto-Detect)**:
+6. **Dùng Cho Mọi Dự Án (Project-Agnostic & Auto-Detect)**:
    - **Tự động nhận diện Git repo**: Mở terminal ở bất kỳ thư mục dự án nào, bot tự động nhận diện `owner/repo`.
    - **Thêm repo tùy ý qua Menu `[a]`**: Nhập hoặc paste link bất kỳ GitHub repo nào.
 
@@ -99,6 +109,7 @@ python3 bot/bot.py --menu
   [s]  Chọn từ Repos của tôi (Browse & Select My GitHub Repos)
   [u]  Chuyển Git User (Switch Active GitHub Account)
   [a]  Thêm / Chuyển Repo khác (Add any GitHub repo to monitor)
+  [k]  Cấu hình AI Provider / API Key (Gemini, DeepSeek, OpenAI)
   [c]  Custom PR number (nhập số PR & repo thủ công)
   [m]  Review NHIỀU PR cùng lúc (vd: 1 3 5)
   [w]  Webhook + Cloudflare Tunnel (tức thì từ GitHub)
@@ -109,9 +120,10 @@ python3 bot/bot.py --menu
 ```
 
 **Tính Năng Tiện Lợi:**
+- **`[k] Cấu hình AI Provider`**: Đổi giữa Google Gemini (`gemini-3.8-flash`), DeepSeek, OpenAI (`gpt-5`), test kết nối tức thì, tự động lưu API Key vào `.env` bảo mật.
 - **`[s] Repos của tôi`**: Xem toàn bộ repositories của tài khoản hiện tại, bấm số để chọn ngay.
 - **`[u] Đổi Git User`**: Chuyển đổi giữa các tài khoản GitHub đã đăng nhập trên máy chỉ bằng 1 thao tác.
-- **`[m] Review nhiều PR`**: Gõ `1 3 5` → Bot tự động điều phối các subagents review tuần tự.
+- **`[m] Review nhiều PR`**: Gõ `1 3 5` → Bot tự động điều phối review tuần tự từng PR.
 - **Tự sửa khi gõ sai**: Nhập sai ký tự → nhắc nhập lại tại chỗ, không reload lại toàn bộ menu.
 
 ---
@@ -164,8 +176,10 @@ auto-review-pr-skill/
 ├── bot/
 │   ├── bot.py                # Entrypoint CLI & routing thông minh
 │   ├── bot_config.json       # File cấu hình repo & port
-│   ├── interactive_menu.py   # Dashboard tương tác, multi-user, repo browser
-│   ├── review_engine.py      # Bộ điều phối 4 Subagents (Backend, Frontend, Sec, QA)
+│   ├── llm_client.py         # Client gọi AI (Gemini/DeepSeek/OpenAI, fallback, quota check)
+│   ├── .env                  # Lưu API Keys bảo mật (được gitignore)
+│   ├── interactive_menu.py   # Dashboard tương tác, multi-user, repo browser, AI settings
+│   ├── review_engine.py      # Bộ điều phối Dual-Mode (AI + 4 Subagents song song)
 │   ├── polling_daemon.py     # Quét định kỳ (All / Reviewer / Assignee)
 │   ├── webhook_server.py     # HTTP Server nhận Webhook GitHub
 │   ├── tunnel_manager.py     # Quản lý Cloudflare Tunnel
