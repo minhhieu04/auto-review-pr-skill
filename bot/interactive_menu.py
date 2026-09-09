@@ -275,10 +275,14 @@ def _run_polling_mode(engine, state_manager, config, repos, current_user):
     print(f"{BLUE}{'='*70}{RESET}")
     print(f"{BOLD}  POLLING DAEMON — CHON CHE DO QUET{RESET}")
     print(f"{BLUE}{'='*70}{RESET}")
-    print(f"  {YELLOW}[1]{RESET}  Quet TOAN BO PR dang mo (all open PRs)")
+    print(f"  {YELLOW}[1]{RESET}  Quet TOAN BO PR dang mo {DIM}(all open PRs){RESET}")
     if current_user:
-        print(f"  {YELLOW}[2]{RESET}  Chi quet PR duoc assign cho ban ({GREEN}{current_user}{RESET})")
+        print(f"  {YELLOW}[2]{RESET}  PR can review boi ban {DIM}(reviewer = @{current_user}){RESET}")
+        print(f"  {YELLOW}[3]{RESET}  PR duoc assign cho ban {DIM}(assignee = @{current_user}){RESET}")
     print(f"  {YELLOW}[b]{RESET}  Quay lai\n")
+    print(f"  {DIM}Giai thich:")
+    print(f"     [2] Reviewer  = team lead request ban review PR do{RESET}")
+    print(f"  {DIM}  [3] Assignee = ban duoc giao xu ly / owner PR do{RESET}\n")
 
     while True:
         sub = input(f"  {BOLD}Lua chon:{RESET} ").strip().lower()
@@ -286,9 +290,15 @@ def _run_polling_mode(engine, state_manager, config, repos, current_user):
             return
         if sub == "1":
             assigned_filter = None
+            reviewer_filter = None
             break
         if sub == "2" and current_user:
+            assigned_filter = None
+            reviewer_filter = current_user
+            break
+        if sub == "3" and current_user:
             assigned_filter = current_user
+            reviewer_filter = None
             break
         print(f"  {RED}Khong hop le, thu lai:{RESET}")
 
@@ -298,15 +308,24 @@ def _run_polling_mode(engine, state_manager, config, repos, current_user):
         engine=engine,
         state_manager=state_manager,
         interval=interval,
-        assigned_filter=assigned_filter
+        assigned_filter=assigned_filter,
+        reviewer_filter=reviewer_filter
     )
-    mode_label = f"assigned to @{assigned_filter}" if assigned_filter else "all open PRs"
-    print(f"\n  {GREEN}Starting Polling Daemon — {mode_label} — every {interval}s{RESET}")
-    print(f"  {DIM}Ctrl+C to stop{RESET}\n")
+    if reviewer_filter:
+        mode_label = f"PRs requested to review by @{reviewer_filter}"
+    elif assigned_filter:
+        mode_label = f"PRs assigned to @{assigned_filter}"
+    else:
+        mode_label = "all open PRs"
+
+    print(f"\n  {GREEN}Polling Daemon STARTED{RESET}")
+    print(f"  Mode     : {CYAN}{mode_label}{RESET}")
+    print(f"  Interval : every {interval}s")
+    print(f"  {YELLOW}[!] De DUNG Polling: nhan Ctrl+C{RESET}\n")
     try:
         daemon.start()
     except KeyboardInterrupt:
-        print("\n  Polling stopped.")
+        print(f"\n  {YELLOW}Polling Daemon da dung.{RESET}")
         input("  Bam Enter de quay lai menu...")
 
 
