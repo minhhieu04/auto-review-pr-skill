@@ -17,6 +17,26 @@ MAGENTA = "\033[0;35m"
 RESET = "\033[0m"
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_config.json")
+ENV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+
+def _save_key_to_env(provider: str, key: str):
+    """Save API key permanently to local .env file."""
+    var_name = "GEMINI_API_KEY" if provider == "gemini" else "DEEPSEEK_API_KEY" if provider == "deepseek" else "OPENAI_API_KEY"
+    lines = []
+    if os.path.exists(ENV_FILE):
+        try:
+            with open(ENV_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    if not line.strip().startswith(f"{var_name}="):
+                        lines.append(line.rstrip("\n"))
+        except Exception:
+            pass
+    lines.append(f"{var_name}={key}")
+    try:
+        with open(ENV_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except Exception as e:
+        print(f"Lỗi lưu .env: {e}")
 
 def clear_screen():
     os.system("clear" if os.name != "nt" else "cls")
@@ -295,7 +315,14 @@ def _manage_ai_settings(config: Dict[str, Any], engine):
             key_input = input(f"\n  Dán {provider.upper()} API Key của bạn: ").strip()
             if key_input:
                 ai_conf["api_key"] = key_input
-                print(f"  {GREEN}✅ Đã lưu API Key!{RESET}")
+                _save_key_to_env(provider, key_input)
+                try:
+                    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                        json.dump(config, f, indent=2, ensure_ascii=False)
+                except Exception:
+                    pass
+                print(f"  {GREEN}✅ Đã lưu API Key vĩnh viễn vào file .env và config!{RESET}")
+                print(f"  {DIM}(Tắt app hay restart máy vẫn được lưu an toàn){RESET}")
                 input("  Bấm Enter để tiếp tục...")
 
         elif sub == "3":

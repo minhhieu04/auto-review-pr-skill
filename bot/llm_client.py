@@ -5,12 +5,38 @@ import urllib.request
 import urllib.error
 from typing import Dict, Any, Optional, List
 
+ENV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+
+def load_env_keys() -> Dict[str, str]:
+    keys = {}
+    if os.path.exists(ENV_FILE):
+        try:
+            with open(ENV_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        keys[k.strip()] = v.strip()
+        except Exception:
+            pass
+    return keys
+
 class LLMClient:
     """Universal LLM client supporting Gemini, DeepSeek, and OpenAI with zero external dependencies."""
 
     def __init__(self, provider: str = "gemini", api_key: str = "", model: str = ""):
         self.provider = provider.lower()
-        self.api_key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") or ""
+        env_keys = load_env_keys()
+
+        if not api_key:
+            if self.provider == "gemini":
+                api_key = env_keys.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY", "")
+            elif self.provider == "deepseek":
+                api_key = env_keys.get("DEEPSEEK_API_KEY") or os.environ.get("DEEPSEEK_API_KEY", "")
+            elif self.provider == "openai":
+                api_key = env_keys.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
+
+        self.api_key = api_key
         self.model = model or self._default_model(self.provider)
 
     def _default_model(self, provider: str) -> str:
