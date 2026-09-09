@@ -592,7 +592,15 @@ class ReviewEngine:
                 if ai_body:
                     print(f"  {GREEN}✨ AI Review generated successfully by {self.llm_client.provider.upper()}!{RESET}")
             except Exception as e:
-                print(f"  {YELLOW}⚠️ AI generation failed ({e}). Falling back to local subagents.{RESET}")
+                err_msg = str(e)
+                if "QUOTA_EXHAUSTED" in err_msg:
+                    print(
+                        f"  {YELLOW}⚠️  AI quota đã hết hôm nay (Free Tier 20 req/ngày). "
+                        f"Tự động chuyển sang Local Subagents...{RESET}"
+                    )
+                else:
+                    print(f"  {YELLOW}⚠️  AI generation failed: {err_msg[:120]}. "
+                          f"Falling back to local subagents.{RESET}")
 
         if ai_body:
             body = ai_body
