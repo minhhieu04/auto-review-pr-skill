@@ -267,7 +267,17 @@ class LLMClient:
                         break
 
                     elif err.code == 503:
-                        # Server overload → retry is meaningful
+                        # If a backup model exists in chain (e.g. 3.6-flash), switch immediately without wasting retry delay
+                        if model_idx + 1 < len(models_to_try):
+                            print(
+                                f"  ⚠️ [{current_model}] Server Google quá tải (503). "
+                                f"Chuyển ngay sang model ổn định: {models_to_try[model_idx + 1]}..."
+                            )
+                            last_error = RuntimeError(f"HTTP 503: {err.reason} - {err_body[:200]}")
+                            model_failed = True
+                            break
+
+                        # For the final fallback model, retry with backoff
                         if attempt < max_retries:
                             wait_sec = attempt * 2
                             print(
@@ -278,7 +288,7 @@ class LLMClient:
                             continue
                         print(
                             f"  ⚠️ [{current_model}] Server vẫn quá tải sau "
-                            f"{max_retries} lần thử. Chuyển sang model tiếp theo..."
+                            f"{max_retries} lần thử."
                         )
                         last_error = RuntimeError(f"HTTP 503: {err.reason} - {err_body[:200]}")
                         model_failed = True
