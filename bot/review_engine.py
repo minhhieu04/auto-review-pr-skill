@@ -51,19 +51,35 @@ class BackendReviewerAgent:
                         "fix": "cursor.execute('SELECT ... WHERE id = %s', [param])"
                     })
 
-                # 2. N+1 Queries in ORM
-                if re.search(r"\.(all\(\)|filter\(|get\()\b", code):
-                    if any(kw in file_lower for kw in ["schema.py", "views.py", "serializers", "services", "resolvers"]):
-                        if "select_related" not in code and "prefetch_related" not in code:
+                # 2. N+1 Queries in ORM (Strict Loop Context Verification)
+                # CRITICAL: An N+1 issue ONLY occurs when an ORM query is executed inside an iterative loop.
+                # NEVER flag Python dictionary .get(), single standalone queries, or queries with select_related.
+                chunk_text = "\n".join(it["content"] for it in chunk["additions"])
+                has_loop_in_chunk = bool(re.search(r"\b(for\s+\w+\s+in\b|while\b)", chunk_text))
+                
+                # Exclude in-memory dictionary accesses
+                is_dict_get = bool(re.search(
+                    r"(?:request|data|params|payload|kwargs|clean_data|context|dict|headers|meta|options|args|config|\w+_dict)\.get\(",
+                    code
+                ))
+                if not is_dict_get and has_loop_in_chunk:
+                    # Require explicit ORM model query (CamelCase Model.objects or .objects)
+                    is_orm_query = bool(re.search(r"\b([A-Z]\w+\.objects|\.objects)\.(get|filter|all|create|update)\b", code))
+                    if is_orm_query:
+                        # Ensure not already pre-fetched in surrounding chunk lines
+                        is_prefetched = "select_related" in chunk_text or "prefetch_related" in chunk_text
+                        # Ensure not a batch query (id__in=...)
+                        is_batch_in = bool(re.search(r"__(?:in|contains|range)\s*=", code))
+                        if not is_prefetched and not is_batch_in:
                             findings.append({
                                 "agent": self.name,
                                 "file": file,
                                 "line": line_no,
-                                "severity": "🔴 Critical",
-                                "level": "critical",
-                                "title": "Potential N+1 Query in ORM Traversal",
-                                "why": "Accessing related models in loops/resolvers without select_related() or prefetch_related() causes N additional DB queries.",
-                                "fix": code.strip() + " # Use .select_related() or .prefetch_related()"
+                                "severity": "🟡 Major",
+                                "level": "major",
+                                "title": "Potential N+1 Query Inside Loop",
+                                "why": "Executing database queries inside an iteration causes N round-trips. Consider batching or using select_related() / prefetch_related() outside the loop.",
+                                "fix": "# Batch query using Model.objects.filter(id__in=ids) outside the loop"
                             })
 
                 # 3. Swallowed Exceptions
@@ -572,6 +588,86 @@ class ReviewEngine:
                     aligned.append(f_copy)
         return aligned
 
+    def filter_false_positives(self, findings: List[Dict[str, Any]], diff_chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Pre-flight filter to eliminate false-positive findings before they touch GitHub.
+        
+        Specifically guards against:
+        1. N+1 claims on in-memory Python dictionary operations (e.g. data.get(), dict.get()).
+        2. N+1 claims on single standalone queries outside of loops.
+        3. N+1 claims on queries that already have select_related() / prefetch_related().
+        4. N+1 claims on batch queries (id__in=...).
+        """
+        clean_findings = []
+        suppressed_count = 0
+
+        for f in findings:
+            title = f.get("title", "").lower()
+            why = f.get("why", "").lower()
+            is_n1_claim = "n+1" in title or "n+1" in why or "orm traversal" in title or "orm traversal" in why
+
+            if not is_n1_claim:
+                clean_findings.append(f)
+                continue
+
+            target_file = f.get("file", "")
+            target_line = f.get("line", 0)
+
+            # Find matching chunk that contains this line
+            matched_chunk = None
+            fallback_chunk = None
+            for chunk in diff_chunks:
+                cf = chunk["file"]
+                if cf == target_file or cf.endswith(target_file) or target_file.endswith(cf):
+                    if any(it["line"] == target_line for it in chunk.get("additions", [])):
+                        matched_chunk = chunk
+                        break
+                    if fallback_chunk is None:
+                        fallback_chunk = chunk
+            if not matched_chunk:
+                matched_chunk = fallback_chunk
+
+            if not matched_chunk:
+                clean_findings.append(f)
+                continue
+
+            chunk_text = "\n".join(it["content"] for it in matched_chunk.get("additions", []))
+            line_code = ""
+            for it in matched_chunk.get("additions", []):
+                if it["line"] == target_line:
+                    line_code = it["content"].strip()
+                    break
+
+            # 1. False positive: in-memory dictionary access
+            if re.search(r"(?:request|data|params|payload|kwargs|clean_data|context|dict|headers|meta|options|args|config|\w+_dict)\.get\(", line_code):
+                suppressed_count += 1
+                continue
+            if ".get(" in line_code and not re.search(r"(\.objects|\b[A-Z]\w+)\.get\(", line_code):
+                suppressed_count += 1
+                continue
+
+            # 2. False positive: batch queries with __in
+            if re.search(r"__(?:in|contains|range)\s*=", line_code):
+                suppressed_count += 1
+                continue
+
+            # 3. False positive: query already has select_related / prefetch_related
+            if "select_related" in line_code or "prefetch_related" in line_code or "select_related" in chunk_text or "prefetch_related" in chunk_text:
+                if not any(kw in chunk_text for kw in ["for ", "while "]):
+                    suppressed_count += 1
+                    continue
+
+            # 4. False positive: single query without any loop in chunk additions
+            has_loop = bool(re.search(r"\b(for\s+\w+\s+in\b|while\b)", chunk_text))
+            if not has_loop and not any(kw in line_code for kw in ["for ", "in ["]):
+                suppressed_count += 1
+                continue
+
+            clean_findings.append(f)
+
+        if suppressed_count > 0:
+            print(f"  🛡️ Suppressed {suppressed_count} false-positive N+1 findings (dict lookups / standalone queries).")
+        return clean_findings
+
     def post_review(self, repo: str, pr_number: int, commit_sha: str, review_body: str, findings: List[Dict[str, Any]]) -> None:
         # 1. Post general comment (Dashboard, Checklist, Verdict)
         subprocess.run([
@@ -675,11 +771,13 @@ class ReviewEngine:
         diff_chunks = self.parse_diff_chunks(diff)
         if ai_body:
             body = ai_body
-            findings = self.align_findings_with_diff(findings, diff_chunks)
+            aligned = self.align_findings_with_diff(findings, diff_chunks)
+            findings = self.filter_false_positives(aligned, diff_chunks)
         else:
             # 2. Fallback to Local 4 Subagent Pipeline
             files = [c["file"] for c in diff_chunks]
-            findings = self.dispatch_subagents(diff_chunks)
+            raw_findings = self.dispatch_subagents(diff_chunks)
+            findings = self.filter_false_positives(raw_findings, diff_chunks)
             body = self.generate_review_markdown(pr, files, findings, is_rereview=is_rereview, prev_sha=last_sha)
 
         print(f"📝 Posting review to GitHub ({repo} PR #{pr_number})...")

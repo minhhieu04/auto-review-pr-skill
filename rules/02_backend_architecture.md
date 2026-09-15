@@ -6,8 +6,10 @@ This module provides universal review guidelines for Backend services (Django, F
 
 ## 1. Database & ORM Performance
 
-### N+1 Query Prevention
-- **Loop Queries**: Never execute queries inside loops or collection resolvers.
+### N+1 Query Prevention & Strict Boundaries
+- **Definition of N+1 Problem**:
+  - An N+1 query problem occurs **ONLY** when a database query is repeatedly executed inside a loop/iteration or GraphQL resolver for each element of a collection (1 primary query + N secondary queries).
+- **Proper Solutions**:
   - *Django*: Use `select_related()` for ForeignKey/OneToOne, `prefetch_related()` for ManyToMany/Reverse FK.
   - *TypeORM / Prisma*: Use `relations` or `include` rather than querying in `map()`.
   - *SQLAlchemy*: Use `joinedload()` or `selectinload()`.
@@ -16,6 +18,19 @@ This module provides universal review guidelines for Backend services (Django, F
   - Prefer `bulk_create()` / `bulk_update()` over saving objects in an iteration.
 - **Unbounded Queries**:
   - Every collection query must have pagination (`limit`/`offset` or cursor-based) or strict filters.
+
+### 🚫 STRICT GUARDRAILS: WHAT IS NOT AN N+1 QUERY (DO NOT FLAG!)
+Reviewers (both AI and automated subagents) must **NEVER** flag the following as N+1 queries:
+1. **In-Memory Data Structure Lookups**:
+   - Python dictionary accesses like `data.get(...)`, `request.data.get(...)`, `params.get(...)`, `dict[key]` are memory lookups, **NOT database queries**.
+2. **Single / Standalone ORM Queries**:
+   - A single `Model.objects.get(...)`, `Model.objects.filter(...)`, `Model.objects.create()`, or `Model.objects.update()` executed once in a view, service, or function outside of a loop executes exactly **1 query**. It is impossible for a single query to be an N+1 problem.
+3. **Queries with Existing Prefetching / Joins**:
+   - Do NOT flag queries that already include `select_related()` or `prefetch_related()`, even if chained across multiple lines.
+4. **Batch Lookups with `__in`**:
+   - Queries like `Model.objects.filter(id__in=id_list)` execute a single SQL query with `WHERE id IN (...)`. This is a best-practice batch query, not an N+1 issue.
+5. **No Evidence of Loop**:
+   - If you cannot point to an explicit iteration construct (`for`, `while`, list comprehension) surrounding the database access, **DO NOT FLAG** as N+1.
 
 ### Migration Safety & Database Locks
 - **Table Locks**: Avoid adding non-nullable columns without defaults on high-traffic tables.
